@@ -428,10 +428,22 @@ elif st.session_state.current_page == 'Analytics':
                 st.caption("No data")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Daily Starting/Ending Balance (chained)
+        # --- Daily Starting/Ending Balance (chained) ---
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🧮 Daily Starting/Ending Balance (by `last_updated`, chained)")
-        dtable = daily_start_end_table_chained(df_viz)
+
+        try:
+            with engine.connect() as conn:
+                df_bal = pd.read_sql(text(f"""
+                    SELECT last_updated, balance_before, balance_after
+                    FROM {tbl('reconciliation')}
+                """), conn)   # <-- tanpa filter sama sekali
+            df_bal = parse_dates(df_bal, ["last_updated"])
+            dtable = daily_start_end_table_chained(df_bal)
+        except Exception as e:
+            st.error(f"❌ Database error (balance): {e}")
+            dtable = pd.DataFrame()
+
         if not dtable.empty:
             st.dataframe(
                 dtable.style.format({"starting_balance":"{:,.2f}", "ending_balance":"{:,.2f}"}),
@@ -439,6 +451,7 @@ elif st.session_state.current_page == 'Analytics':
             )
         else:
             st.info("Data tidak cukup untuk menghitung starting/ending balance harian.")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
     else:
