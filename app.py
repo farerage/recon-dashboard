@@ -9,8 +9,27 @@ import config
 # DATABASE CONNECTION
 # ======================
 engine = create_engine(
-    f"postgresql+psycopg2://{config.DB_USER}:{config.DB_PASS}@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
+    f"postgresql+psycopg2://{config.DB_USER}:{config.DB_PASS}"
+    f"@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
 )
+
+SCHEMA = getattr(config, "DB_SCHEMA", "public").strip() or "public"
+
+def tbl(name: str) -> str:
+    """Qualified table name with schema."""
+    return f'{SCHEMA}.{name}'
+
+def ensure_schema(engine, schema: str):
+    """Create schema if not exists (safe to run repeatedly)."""
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}";'))
+
+# Pastikan schema tersedia kalau bukan 'public'
+if SCHEMA != "public":
+    try:
+        ensure_schema(engine, SCHEMA)
+    except Exception as e:
+        st.info(f"Note: gagal membuat schema {SCHEMA}: {e}. Pastikan role DB-mu punya izin.")
 
 # ======================
 # CUSTOM CSS - Paper.id Style
@@ -667,85 +686,68 @@ st.markdown("""
 # ======================
 # PAGE CONFIG
 # ======================
-st.set_page_config(
-    page_title="Reconciliation Dashboard", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Reconciliation Dashboard", layout="wide", initial_sidebar_state="expanded")
 
 # ======================
 # SIDEBAR NAVIGATION
 # ======================
 with st.sidebar:
     st.markdown('<div class="nav-title">🎯 Navigation</div>', unsafe_allow_html=True)
-    
-    # Initialize session state for navigation
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 'Dashboard'
-    
-    # Custom navigation menu
+
     st.markdown('<div class="nav-menu">', unsafe_allow_html=True)
-    
-    # Dashboard
     if st.button("📊 Dashboard", key="nav_dashboard", use_container_width=True):
         st.session_state.current_page = 'Dashboard'
-    
-    # Upload Data  
     if st.button("📤 Upload Data", key="nav_upload", use_container_width=True):
         st.session_state.current_page = 'Upload Data'
-    
-    # Visualization
     if st.button("📈 Analytics", key="nav_visualization", use_container_width=True):
         st.session_state.current_page = 'Visualization'
-    
     st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Add some spacing and info
+
     st.markdown("---")
     st.markdown("### 📈 Quick Stats")
     try:
         with engine.connect() as conn:
-            quick_stats = pd.read_sql(text("""
+            quick_stats = pd.read_sql(text(f"""
                 SELECT 
                     COUNT(*) as total_records,
                     COUNT(CASE WHEN recon_status = 'Reconciled' THEN 1 END) as reconciled,
                     COUNT(CASE WHEN recon_status = 'Unreconciled' THEN 1 END) as unreconciled
-                FROM reconku.reconciliation 
+                FROM {tbl('reconciliation')}
                 WHERE transaction_date_dash >= CURRENT_DATE - INTERVAL '7 days'
             """), conn)
-            
             if not quick_stats.empty:
                 st.metric("Records (7d)", f"{quick_stats.iloc[0]['total_records']:,}")
                 st.metric("Reconciled", f"{quick_stats.iloc[0]['reconciled']:,}")
                 st.metric("Unreconciled", f"{quick_stats.iloc[0]['unreconciled']:,}")
-    except:
-        st.info("Connect to view stats")
+    except Exception as e:
+        st.info(f"Connect to view stats (schema={SCHEMA}). Detail: {e}")
 
-# Get the current page from session state
-selected_menu = f"📊 {st.session_state.current_page}" if st.session_state.current_page == 'Dashboard' else f"📤 {st.session_state.current_page}" if st.session_state.current_page == 'Upload Data' else f"📈 {st.session_state.current_page}"
+# Label menu (opsional dipakai)
+selected_menu = (
+    f"📊 {st.session_state.current_page}" if st.session_state.current_page == 'Dashboard'
+    else f"📤 {st.session_state.current_page}" if st.session_state.current_page == 'Upload Data'
+    else f"📈 {st.session_state.current_page}"
+)
 
 # ======================
-# MAIN CONTENT BASED ON MENU
+# MAIN CONTENT
 # ======================
-
 if st.session_state.current_page == 'Upload Data':
-    # ======================
-    # UPLOAD PAGE
-    # ======================
     st.title("📤 Upload Reconciliation Data")
     st.markdown('<p class="subtitle">Upload your CSV or Excel files to the database</p>', unsafe_allow_html=True)
-    
-    # Upload section
+
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📁 File Upload")
-        
+
         uploaded_file = st.file_uploader(
             "Choose your reconciliation data file",
             type=["csv", "xlsx"],
             help="Supported formats: CSV, Excel (.xlsx)"
         )
-        
+
         if uploaded_file is not None:
             try:
                 # Read file
@@ -753,7 +755,7 @@ if st.session_state.current_page == 'Upload Data':
                     df_upload = pd.read_csv(uploaded_file)
                 else:
                     df_upload = pd.read_excel(uploaded_file)
-                
+
                 # File info
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -762,12 +764,12 @@ if st.session_state.current_page == 'Upload Data':
                     st.metric("Total Rows", f"{len(df_upload):,}")
                 with col3:
                     st.metric("Total Columns", len(df_upload.columns))
-                
-                # Preview data
+
+                # Preview
                 st.markdown("### 👀 Data Preview")
                 st.dataframe(df_upload.head(10), use_container_width=True)
-                
-                # Duplicate handling options
+
+                # Options
                 st.markdown("### ⚙️ Upload Options")
                 col1, col2 = st.columns(2)
                 with col1:
@@ -782,14 +784,13 @@ if st.session_state.current_page == 'Upload Data':
                         ["tx_id_gds", "ref_number_gds", "unique_id_gds", "invoice_number_dash"],
                         help="Column used to identify duplicate records"
                     )
-                
+
                 # Upload button
                 if st.button("💾 Save to Database", type="primary", use_container_width=True):
                     with st.spinner("Processing and saving data to database..."):
-                        # Process data
+                        # Normalize columns
                         df_upload.columns = [c.lower() for c in df_upload.columns]
-                        
-                        # Valid columns
+
                         valid_columns = [
                             'no_dash','payment_method_dash','acquirer_dash','transaction_date_dash',
                             'recon_code_dash','invoice_number_dash','type_dash','credit_type_dash','currency_dash',
@@ -804,117 +805,113 @@ if st.session_state.current_page == 'Upload Data':
                             'mam_child_username_gds','mam_parent_username_gds','charge_transaction_id_gds',
                             '_merge','recon_status'
                         ]
-                        
                         df_upload = df_upload[[c for c in df_upload.columns if c in valid_columns]]
-                        
+
                         # Date parsing
                         date_columns = [
                             'transaction_date_dash', 'created_datetime_gds', 'last_updated_datetime_gds',
                             'transaction_datetime_gds', 'settlement_time_gds'
                         ]
-                        
                         for col in date_columns:
                             if col in df_upload.columns:
-                                df_upload[col] = pd.to_datetime(df_upload[col], errors="coerce", dayfirst=True, infer_datetime_format=True)
-                        
+                                df_upload[col] = pd.to_datetime(df_upload[col], errors="coerce", dayfirst=True)
+
                         # Numeric columns
                         numeric_columns = [
                             'total_amount_dash','total_discount_dash','total_fee_dash','net_amount_dash',
                             'settlement_amount_dash','settlement_amount_gds','amount_gds','admin_fee_gds',
                             'admin_fee_invoice_gds','deduction_cost_gds'
                         ]
-                        
                         for col in numeric_columns:
                             if col in df_upload.columns:
-                                df_upload[col] = (df_upload[col].astype(str).str.replace(",", "").str.replace(" ", ""))
+                                df_upload[col] = (
+                                    df_upload[col].astype(str)
+                                        .str.replace(",", "", regex=False)
+                                        .str.replace(" ", "", regex=False)
+                                )
                                 df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
-                        
-                        # Handle duplicates based on selected option
+
+                        # Dedupe flow
                         unique_col = unique_column.lower()
-                        
+
                         if duplicate_action == "Add All (Allow Duplicates)":
-                            # Just append all data
                             with engine.begin() as conn:
-                                df_upload.to_sql("reconciliation", conn, if_exists="append", index=False)
+                                df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
                             uploaded_count = len(df_upload)
                             duplicate_count = 0
-                            
+
                         else:
-                            # Check for existing records
                             if unique_col in df_upload.columns:
-                                # Get existing records from database
-                                unique_values = df_upload[unique_col].dropna().unique()
-                                unique_values_str = "','".join(str(v) for v in unique_values)
-                                
+                                unique_values = df_upload[unique_col].dropna().astype(str).unique()
+
                                 with engine.connect() as conn:
-                                    existing_query = f"""
-                                    SELECT DISTINCT {unique_col} 
-                                    FROM reconku.reconciliation 
-                                    WHERE {unique_col} IN ('{unique_values_str}')
-                                    """
-                                    try:
-                                        existing_df = pd.read_sql(text(existing_query), conn)
-                                        existing_ids = set(existing_df[unique_col].values)
-                                    except:
+                                    if len(unique_values) == 0:
                                         existing_ids = set()
-                                
-                                # Identify duplicates and new records
-                                df_upload['is_duplicate'] = df_upload[unique_col].isin(existing_ids)
-                                duplicates = df_upload[df_upload['is_duplicate']]
-                                new_records = df_upload[~df_upload['is_duplicate']]
-                                
+                                    else:
+                                        # escape single quotes
+                                        vals = "', '".join(v.replace("'", "''") for v in unique_values)
+                                        existing_query = f"""
+                                            SELECT DISTINCT {unique_col}
+                                            FROM {tbl('reconciliation')}
+                                            WHERE {unique_col} IN ('{vals}')
+                                        """
+                                        try:
+                                            existing_df = pd.read_sql(text(existing_query), conn)
+                                            existing_ids = set(existing_df[unique_col].astype(str).values)
+                                        except Exception:
+                                            existing_ids = set()
+
+                                df_upload['__is_dup'] = df_upload[unique_col].astype(str).isin(existing_ids)
+                                duplicates = df_upload[df_upload['__is_dup']]
+                                new_records = df_upload[~df_upload['__is_dup']]
                                 duplicate_count = len(duplicates)
-                                
+
                                 if duplicate_action == "Skip Duplicates":
-                                    # Only insert new records
                                     if len(new_records) > 0:
-                                        new_records_clean = new_records.drop('is_duplicate', axis=1)
                                         with engine.begin() as conn:
-                                            new_records_clean.to_sql("reconciliation", conn, if_exists="append", index=False)
+                                            new_records.drop(columns='__is_dup').to_sql(
+                                                "reconciliation", conn, if_exists="append", index=False, schema=SCHEMA
+                                            )
                                     uploaded_count = len(new_records)
-                                    
+
                                 elif duplicate_action == "Update Existing":
-                                    # Insert new records
+                                    # Insert new
                                     if len(new_records) > 0:
-                                        new_records_clean = new_records.drop('is_duplicate', axis=1)
                                         with engine.begin() as conn:
-                                            new_records_clean.to_sql("reconciliation", conn, if_exists="append", index=False)
-                                    
-                                    # Update existing records using PostgreSQL UPSERT
+                                            new_records.drop(columns='__is_dup').to_sql(
+                                                "reconciliation", conn, if_exists="append", index=False, schema=SCHEMA
+                                            )
+
+                                    # Upsert duplicates
                                     if len(duplicates) > 0:
-                                        duplicates_clean = duplicates.drop('is_duplicate', axis=1)
-                                        
-                                        # Create temporary table
+                                        duplicates_clean = duplicates.drop(columns='__is_dup')
                                         with engine.begin() as conn:
+                                            # Temp table (schema default)
                                             duplicates_clean.to_sql("temp_reconciliation", conn, if_exists="replace", index=False)
-                                            
-                                            # Perform upsert using PostgreSQL's ON CONFLICT
+
                                             columns = list(duplicates_clean.columns)
                                             columns_str = ', '.join(columns)
-                                            update_str = ', '.join([f"{col} = EXCLUDED.{col}" for col in columns if col != unique_col])
-                                            
+                                            update_str = ', '.join(
+                                                [f"{col} = EXCLUDED.{col}" for col in columns if col != unique_col]
+                                            )
                                             upsert_query = f"""
-                                            INSERT INTO reconciliation ({columns_str})
-                                            SELECT {columns_str} FROM temp_reconciliation
-                                            ON CONFLICT ({unique_col}) DO UPDATE SET {update_str}
+                                                INSERT INTO {tbl('reconciliation')} ({columns_str})
+                                                SELECT {columns_str} FROM temp_reconciliation
+                                                ON CONFLICT ({unique_col}) DO UPDATE SET {update_str}
                                             """
-                                            
                                             conn.execute(text(upsert_query))
                                             conn.execute(text("DROP TABLE temp_reconciliation"))
-                                    
+
                                     uploaded_count = len(df_upload)
-                                
-                                # Clean up temporary column
-                                df_upload = df_upload.drop('is_duplicate', axis=1)
-                                
+
+                                df_upload.drop(columns='__is_dup', inplace=True)
                             else:
-                                # If unique column not found, just append
                                 with engine.begin() as conn:
-                                    df_upload.to_sql("reconciliation", conn, if_exists="append", index=False)
+                                    df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
                                 uploaded_count = len(df_upload)
                                 duplicate_count = 0
-                        
-                        # Success message with details
+
+                        # Messages
                         if duplicate_count > 0:
                             if duplicate_action == "Skip Duplicates":
                                 st.success(f"✅ Successfully uploaded {uploaded_count:,} new records! Skipped {duplicate_count:,} duplicates.")
@@ -924,46 +921,37 @@ if st.session_state.current_page == 'Upload Data':
                                 st.success(f"✅ Successfully uploaded {uploaded_count:,} records!")
                         else:
                             st.success(f"✅ Successfully uploaded {uploaded_count:,} new records to the database!")
-                        
-                        # Show summary
+
                         if duplicate_count > 0:
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Total Records", f"{len(df_upload):,}")
-                            with col2:
-                                st.metric("New Records", f"{uploaded_count:,}")
-                            with col3:
-                                st.metric("Duplicates Found", f"{duplicate_count:,}")
-                        
+                            c1, c2, c3 = st.columns(3)
+                            with c1: st.metric("Total Records", f"{len(df_upload):,}")
+                            with c2: st.metric("New Records", f"{uploaded_count:,}")
+                            with c3: st.metric("Duplicates Found", f"{duplicate_count:,}")
+
             except Exception as e:
                 st.error(f"❌ Error processing file: {e}")
-        
+
         st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.current_page == 'Visualization':
-    # ======================
-    # VISUALIZATION PAGE
-    # ======================
     st.title("📊 Data Visualization")
     st.markdown('<p class="subtitle">Visual analytics of reconciliation data</p>', unsafe_allow_html=True)
-    
-    # Get data for visualization
+
     try:
         with engine.connect() as conn:
-            df_viz = pd.read_sql(text("""
+            df_viz = pd.read_sql(text(f"""
                 SELECT transaction_date_dash, username_gds, tx_id_gds, 
                        total_amount_dash, recon_status, payment_method_dash
-                FROM reconku.reconciliation 
+                FROM {tbl('reconciliation')}
                 WHERE transaction_date_dash >= CURRENT_DATE - INTERVAL '30 days'
             """), conn)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df_viz = pd.DataFrame()
-    
+
     if not df_viz.empty:
-        # Charts in columns
         col1, col2 = st.columns(2)
-        
+
         with col1:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 🥧 Status Distribution")
@@ -975,20 +963,24 @@ elif st.session_state.current_page == 'Visualization':
             fig_pie.update_layout(showlegend=True, height=400)
             st.plotly_chart(fig_pie, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
-        
+
         with col2:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 📈 Daily Trend (Last 30 Days)")
-            daily_data = df_viz.groupby([df_viz['transaction_date_dash'].dt.date, 'recon_status']).size().reset_index(name='count')
+            if not pd.api.types.is_datetime64_any_dtype(df_viz['transaction_date_dash']):
+                df_viz['transaction_date_dash'] = pd.to_datetime(df_viz['transaction_date_dash'], errors='coerce')
+            daily_data = (
+                df_viz.groupby([df_viz['transaction_date_dash'].dt.date, 'recon_status'])
+                .size().reset_index(name='count')
+            ).rename(columns={'transaction_date_dash': 'tx_date'})
             fig_line = px.line(
-                daily_data, x='transaction_date_dash', y='count', color='recon_status',
+                daily_data, x='tx_date', y='count', color='recon_status',
                 color_discrete_map={'Reconciled': '#10b981', 'Unreconciled': '#ef4444'}
             )
             fig_line.update_layout(height=400)
             st.plotly_chart(fig_line, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Payment method analysis
+
         if 'payment_method_dash' in df_viz.columns:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 💳 Payment Method Analysis")
@@ -1000,22 +992,17 @@ elif st.session_state.current_page == 'Visualization':
             fig_bar.update_layout(height=400)
             st.plotly_chart(fig_bar, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
-            
     else:
         st.info("📊 No data available for visualization. Please upload data first.")
 
 else:
-    # ======================
-    # DASHBOARD PAGE (DEFAULT)
-    # ======================
+    # DASHBOARD
     st.title("📊 Reconciliation Dashboard")
     st.markdown('<p class="subtitle">Monitor and analyze your reconciliation data</p>', unsafe_allow_html=True)
-    
-    # Filters section
+
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🔍 Filters")
-        
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             start_date = st.date_input("Start Date", value=datetime(2025,1,1))
@@ -1025,72 +1012,67 @@ else:
             username = st.text_input("Username")
         with col4:
             identifier = st.text_input("Transaction ID")
-        
         st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Query data
-    query = """
-    SELECT transaction_date_dash, username_gds, tx_id_gds, total_amount_dash, recon_status,
-           payment_method_dash, acquirer_dash
-    FROM reconku.reconciliation
-    WHERE transaction_date_dash BETWEEN :start_date AND :end_date
+
+    query = f"""
+        SELECT transaction_date_dash, username_gds, tx_id_gds, total_amount_dash, recon_status,
+               payment_method_dash, acquirer_dash
+        FROM {tbl('reconciliation')}
+        WHERE transaction_date_dash BETWEEN :start_date AND :end_date
     """
     params = {"start_date": start_date, "end_date": end_date}
-    
     if username:
         query += " AND username_gds ILIKE :username"
         params["username"] = f"%{username}%"
     if identifier:
         query += " AND tx_id_gds ILIKE :identifier"
         params["identifier"] = f"%{identifier}%"
-    
+
     try:
         with engine.connect() as conn:
             df = pd.read_sql(text(query), conn, params=params)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df = pd.DataFrame()
-    
+
     if not df.empty:
-        # Metrics summary
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 📈 Summary Metrics")
-            
+
             col1, col2, col3, col4 = st.columns(4)
-            
             total_records = len(df)
-            reconciled_count = len(df[df['recon_status'] == 'Recon'])
+
+            # >>> Seragamkan status: gunakan 'Reconciled'/'Unreconciled'
+            reconciled_count = len(df[df['recon_status'] == 'Reconciled'])
             unreconciled_count = len(df[df['recon_status'] == 'Unreconciled'])
             total_amount = df['total_amount_dash'].sum() if 'total_amount_dash' in df.columns else 0
-            
+
             with col1:
                 st.metric("Total Records", f"{total_records:,}")
             with col2:
-                st.metric("Reconciled", f"{reconciled_count:,}", f"{reconciled_count/total_records*100:.1f}%")
+                st.metric("Reconciled", f"{reconciled_count:,}", f"{(reconciled_count/total_records*100 if total_records else 0):.1f}%")
             with col3:
-                st.metric("Unreconciled", f"{unreconciled_count:,}", f"{unreconciled_count/total_records*100:.1f}%")
+                st.metric("Unreconciled", f"{unreconciled_count:,}", f"{(unreconciled_count/total_records*100 if total_records else 0):.1f}%")
             with col4:
                 st.metric("Total Amount", f"Rp {total_amount:,.0f}")
-            
+
             st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Data tables
+
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 📋 Reconciliation Data")
-            
             tab1, tab2, tab3 = st.tabs(["📊 All Data", "✅ Reconciled", "❌ Unreconciled"])
-            
+
             with tab1:
                 st.dataframe(df, use_container_width=True, height=400)
                 st.download_button(
                     "📥 Download All Data", df.to_csv(index=False),
                     f"reconciliation_all_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv"
                 )
-            
+
             with tab2:
-                df_reconciled = df[df['recon_status'] == 'Recon']
+                df_reconciled = df[df['recon_status'] == 'Reconciled']
                 if not df_reconciled.empty:
                     st.dataframe(df_reconciled, use_container_width=True, height=400)
                     st.download_button(
@@ -1099,7 +1081,7 @@ else:
                     )
                 else:
                     st.info("No reconciled data found.")
-            
+
             with tab3:
                 df_unreconciled = df[df['recon_status'] == 'Unreconciled']
                 if not df_unreconciled.empty:
@@ -1110,7 +1092,7 @@ else:
                     )
                 else:
                     st.info("No unreconciled data found.")
-            
+
             st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("🔍 No data found. Please check your filters or upload data first.")
