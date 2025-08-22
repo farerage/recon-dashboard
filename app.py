@@ -386,7 +386,7 @@ elif st.session_state.current_page == 'Analytics':
         # 1) Sum std_amount by std_transaction_date
         with cA:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("**Sum `std_amount` by `std_transaction_date`**")
+            st.markdown("Sum Transaction Amount")
             g1 = safe_sum_by_date(df_viz, "std_transaction_date", "std_amount")
             if not g1.empty:
                 st.dataframe(
@@ -400,7 +400,7 @@ elif st.session_state.current_page == 'Analytics':
         # 2) Sum (std_amount - std_vendor_cost) by std_vendor_settled_date
         with cB:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("**Sum `(std_amount - std_vendor_cost)` by `std_vendor_settled_date`**")
+            st.markdown("Sum Vendor Settlement Amount")
             tmp = df_viz.copy()
             tmp["_net_value"] = tmp["std_amount"].fillna(0) - tmp["std_vendor_cost"].fillna(0)
             g2 = safe_sum_by_date(tmp.rename(columns={"_net_value":"net_value"}),
@@ -417,7 +417,7 @@ elif st.session_state.current_page == 'Analytics':
         # 3) Sum amount by last_updated (date)
         with cC:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("**Sum `amount` by `last_updated` (date)**")
+            st.markdown("Sum Settled Client Amount")
             g3 = safe_sum_by_date(df_viz, "last_updated", "amount")
             if not g3.empty:
                 st.dataframe(
