@@ -15,7 +15,6 @@ engine = create_engine(
 )
 
 SCHEMA = getattr(config, "DB_SCHEMA", "public").strip() or "public"
-TABLE = "reconciliation"
 
 def tbl(name: str) -> str:
     """Qualified table name with schema."""
@@ -76,140 +75,10 @@ div[data-testid="stMetricLabel"]{font-size:.78rem !important; color:var(--text-3
 """, unsafe_allow_html=True)
 
 # ======================
-# HELPERS
-# ======================
-DATE_COLS = [
-    'std_transaction_date', 'std_vendor_settled_date', 'last_updated', 'created'
-]
-NUM_COLS = [
-    'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
-    'amount','balance_before','balance_after',
-    'used_overdraft_before','used_overdraft_after','service_fee_paid',
-    'transaction_fee_paid','service_fee_before','service_fee_after',
-    'pending_balance_after','pending_balance_before','admin_fee','transfer_amount',
-    'freeze_balance_before','freeze_balance_after'
-]
-
-FRONTEND_COLS = [
-    'std_transaction_date', 'std_vendor', 'std_identifier', 'std_username',
-    'std_admin_fee', 'std_admin_fee_invoice', 'std_amount',
-    'std_vendor_cost', 'std_balance_joiner', 'std_vendor_settled_date'
-]
-
-FILTER_COLS = ['std_transaction_date', 'std_vendor', 'std_identifier', 'std_balance_joiner']
-
-def parse_dates(df: pd.DataFrame, cols):
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
-    return df
-
-def normalize_numeric(df: pd.DataFrame, cols):
-    for c in cols:
-        if c in df.columns:
-            df[c] = (
-                df[c].astype(str)
-                    .str.replace(",", "", regex=False)
-                    .str.replace(" ", "", regex=False)
-            )
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
-def sum_by_std_transaction_date(df: pd.DataFrame) -> pd.DataFrame:
-    """SUM(std_amount) grouped by date(std_transaction_date)."""
-    need = {'std_transaction_date','std_amount'}
-    if not need.issubset(df.columns):
-        return pd.DataFrame(columns=['date','sum_std_amount'])
-    d = df.copy()
-    d = parse_dates(d, ['std_transaction_date'])
-    d['date'] = d['std_transaction_date'].dt.date
-    out = d.groupby('date', dropna=True)['std_amount'].sum(min_count=1).reset_index()
-    out = out.rename(columns={'std_amount':'sum_std_amount'})
-    return out.sort_values('date')
-
-def sum_by_std_vendor_settled_date(df: pd.DataFrame) -> pd.DataFrame:
-    """SUM(std_amount - std_vendor_cost) grouped by date(std_vendor_settled_date)."""
-    need = {'std_vendor_settled_date','std_amount','std_vendor_cost'}
-    if not need.issubset(df.columns):
-        return pd.DataFrame(columns=['date','sum_net_vendor'])
-    d = df.copy()
-    d = parse_dates(d, ['std_vendor_settled_date'])
-    d = normalize_numeric(d, ['std_amount','std_vendor_cost'])
-    d['date'] = d['std_vendor_settled_date'].dt.date
-    d['net_vendor'] = d['std_amount'].fillna(0) - d['std_vendor_cost'].fillna(0)
-    out = d.groupby('date', dropna=True)['net_vendor'].sum(min_count=1).reset_index()
-    out = out.rename(columns={'net_vendor':'sum_net_vendor'})
-    return out.sort_values('date')
-
-def sum_by_last_updated_date(df: pd.DataFrame) -> pd.DataFrame:
-    """SUM(amount) grouped by date(last_updated)."""
-    need = {'last_updated','amount'}
-    if not need.issubset(df.columns):
-        return pd.DataFrame(columns=['date','sum_amount'])
-    d = df.copy()
-    d = parse_dates(d, ['last_updated'])
-    d = normalize_numeric(d, ['amount'])
-    d['date'] = d['last_updated'].dt.date
-    out = d.groupby('date', dropna=True)['amount'].sum(min_count=1).reset_index()
-    out = out.rename(columns={'amount':'sum_amount'})
-    return out.sort_values('date')
-
-def compute_start_end_balances(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Hitung starting/ending balance per hari (tanggal = date(last_updated)):
-    - Starting D = Ending D-1 jika ada; kalau tidak ada, earliest balance_before di hari D (kalau ada).
-    - Ending D   = latest balance_after di hari D; jika tidak ada, fallback starting + SUM(amount di hari D).
-    """
-    if 'last_updated' not in df.columns:
-        return pd.DataFrame(columns=['date','starting_balance','ending_balance','rows'])
-
-    d = df.copy()
-    d = parse_dates(d, ['last_updated'])
-    d = normalize_numeric(d, ['balance_before','balance_after','amount'])
-    d['date'] = d['last_updated'].dt.date
-
-    results = []
-    prev_end = None
-
-    for day, g in sorted(d.groupby('date'), key=lambda kv: kv[0]):
-        g_sorted = g.sort_values('last_updated')
-
-        # starting prefer previous day ending
-        starting = prev_end
-        if pd.isna(starting) or starting is None:
-            if 'balance_before' in g_sorted.columns and g_sorted['balance_before'].notna().any():
-                starting = g_sorted.loc[g_sorted['balance_before'].first_valid_index(), 'balance_before']
-
-        # ending prefer last balance_after
-        ending = None
-        if 'balance_after' in g_sorted.columns and g_sorted['balance_after'].notna().any():
-            ending = g_sorted.loc[g_sorted['balance_after'].last_valid_index(), 'balance_after']
-
-        # fallback ending
-        if (ending is None or pd.isna(ending)) and starting is not None:
-            total_amt = g_sorted['amount'].fillna(0).sum() if 'amount' in g_sorted.columns else 0
-            ending = starting + total_amt
-
-        results.append({
-            'date': day,
-            'starting_balance': starting,
-            'ending_balance': ending,
-            'rows': int(len(g_sorted))
-        })
-        prev_end = ending
-
-    return pd.DataFrame(results)
-
-# ======================
-# PAGE CONFIG
-# ======================
-st.set_page_config(page_title="Reconciliation Dashboard", layout="wide", initial_sidebar_state="expanded")
-
-# ======================
 # SIDEBAR NAVIGATION
 # ======================
 with st.sidebar:
-    st.markdown('### 🎯 Navigation')
+    st.markdown('<div class="nav-title">🎯 Navigation</div>', unsafe_allow_html=True)
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 'Dashboard'
 
@@ -224,36 +93,98 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📈 Quick Stats")
+    # Quick stats: 7 hari terakhir by std_transaction_date
     try:
         with engine.connect() as conn:
-            # Quick stats 7 hari terakhir berbasis std_transaction_date
             qs = pd.read_sql(text(f"""
-                SELECT
-                    COUNT(*) AS total_records,
-                    COUNT(DISTINCT std_vendor) AS unique_vendors,
-                    COUNT(DISTINCT std_identifier) AS unique_identifiers
-                FROM {tbl(TABLE)}
+                SELECT 
+                  COUNT(*) AS total_records,
+                  COALESCE(SUM(std_amount),0) AS total_amount
+                FROM {tbl('reconciliation')}
                 WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '7 days'
             """), conn)
             if not qs.empty:
                 st.metric("Records (7d)", f"{qs.iloc[0]['total_records']:,}")
-                st.metric("Vendors (7d)", f"{qs.iloc[0]['unique_vendors']:,}")
-                st.metric("Identifiers (7d)", f"{qs.iloc[0]['unique_identifiers']:,}")
+                st.metric("Sum Amount (7d)", f"{float(qs.iloc[0]['total_amount']):,.2f}")
     except Exception as e:
         st.info(f"Connect to view stats (schema={SCHEMA}). Detail: {e}")
 
 # ======================
-# MAIN CONTENT
+# HELPERS
+# ======================
+def parse_dates(df: pd.DataFrame, cols):
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+def coalesce(a, b):
+    return a if pd.notna(a) else b
+
+def compute_start_end_balance(df: pd.DataFrame):
+    """
+    Starting = balance_after (fallback balance_before) pada earliest last_updated
+    Ending   = balance_after (fallback balance_before) pada latest last_updated
+    """
+    if df.empty or "last_updated" not in df.columns:
+        return None, None
+    tmp = df.copy()
+    tmp = parse_dates(tmp, ["last_updated"])
+    tmp = tmp.sort_values("last_updated")
+    # ambil first/last row yg punya nilai salah satu balance
+    first = tmp.loc[tmp[["balance_after","balance_before"]].notna().any(axis=1)].head(1)
+    last  = tmp.loc[tmp[["balance_after","balance_before"]].notna().any(axis=1)].tail(1)
+    if first.empty or last.empty:
+        return None, None
+    start_val = coalesce(first.iloc[0].get("balance_after"), first.iloc[0].get("balance_before"))
+    end_val   = coalesce(last.iloc[0].get("balance_after"),  last.iloc[0].get("balance_before"))
+    try:
+        start_val = float(start_val) if start_val is not None else None
+        end_val   = float(end_val) if end_val is not None else None
+    except Exception:
+        pass
+    return start_val, end_val
+
+def daily_start_end_table(df: pd.DataFrame):
+    """
+    Buat tabel per-hari (berdasarkan tanggal last_updated) untuk starting & ending balance.
+    """
+    if df.empty or "last_updated" not in df.columns:
+        return pd.DataFrame()
+    d = df.copy()
+    d = parse_dates(d, ["last_updated"])
+    d["lu_date"] = d["last_updated"].dt.date
+    rows = []
+    for dte, group in d.groupby("lu_date", dropna=True):
+        s, e = compute_start_end_balance(group)
+        rows.append({"date": dte, "starting_balance": s, "ending_balance": e})
+    if rows:
+        out = pd.DataFrame(rows).sort_values("date")
+        return out
+    return pd.DataFrame()
+
+def safe_sum_by_date(df: pd.DataFrame, col_date: str, value_col: str = "std_amount"):
+    if df.empty or col_date not in df.columns:
+        return pd.DataFrame()
+    temp = df.copy()
+    temp = parse_dates(temp, [col_date])
+    # group by tanggal saja (tanpa jam)
+    temp["__d"] = temp[col_date].dt.date
+    g = temp.groupby("__d", dropna=True)[value_col].sum().reset_index()
+    g.columns = ["date", f"sum_{value_col}"]
+    return g.sort_values("date")
+
+# ======================
+# PAGES
 # ======================
 if st.session_state.current_page == 'Upload Data':
-    # ======================
-    # UPLOAD PAGE
-    # ======================
     st.title("📤 Upload Reconciliation Data")
-    st.caption("Upload CSV/Excel dengan kolom standar `std_*` + kolom operasional.")
+    st.markdown('<p class="subtitle">Upload CSV/XLSX dengan kolom std_* dan related fields</p>', unsafe_allow_html=True)
 
     with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📁 File Upload")
+
         uploaded_file = st.file_uploader(
             "Choose your reconciliation data file",
             type=["csv", "xlsx"],
@@ -262,314 +193,345 @@ if st.session_state.current_page == 'Upload Data':
 
         if uploaded_file is not None:
             try:
-                # Read file
-                if uploaded_file.name.endswith(".csv"):
-                    df_upload = pd.read_csv(uploaded_file)
-                else:
-                    df_upload = pd.read_excel(uploaded_file)
+                df_upload = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
 
-                # Normalize headers
-                df_upload.columns = [c.strip().lower() for c in df_upload.columns]
-
-                # Hanya ambil kolom yang dikenal
-                valid_columns = [
-                    # std*
-                    'std_transaction_date','std_vendor','std_identifier','std_username',
-                    'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
-                    'std_balance_joiner','std_vendor_settled_date',
-                    # kunci & meta
-                    'id','created','create_by','last_updated','last_update_by','tx_id',
-                    'tx_type','username','amount','balance_flow','balance_before','balance_after',
-                    'description','used_overdraft_before','used_overdraft_after','service_fee_paid',
-                    'transaction_fee_paid','service_fee_before','service_fee_after',
-                    'pending_balance_after','pending_balance_before','admin_fee','transfer_amount',
-                    'freeze_balance_before','freeze_balance_after','recon_balance_status'
-                ]
-                df_upload = df_upload[[c for c in df_upload.columns if c in valid_columns]]
-
-                # Info file
                 c1, c2, c3 = st.columns(3)
                 with c1: st.metric("File Name", uploaded_file.name)
                 with c2: st.metric("Total Rows", f"{len(df_upload):,}")
                 with c3: st.metric("Total Columns", len(df_upload.columns))
 
-                # Preview
                 st.markdown("### 👀 Data Preview")
                 st.dataframe(df_upload.head(10), use_container_width=True)
 
-                # Options
                 st.markdown("### ⚙️ Upload Options")
                 col1, col2 = st.columns(2)
                 with col1:
                     duplicate_action = st.selectbox(
                         "Handle Duplicates:",
                         ["Skip Duplicates", "Update Existing", "Add All (Allow Duplicates)"],
-                        help="Bagaimana menangani baris yang id-nya sudah ada di DB"
+                        help="ON CONFLICT pakai std_identifier (disarankan unique)"
                     )
                 with col2:
-                    unique_col = "id"
-                    st.text_input("Unique Identifier (fixed)", value=unique_col, disabled=True)
+                    unique_column = st.selectbox(
+                        "Unique Identifier:",
+                        ["std_identifier", "tx_id"],
+                        help="Kolom unik untuk dedupe/UPSERT"
+                    )
 
-                # Parse dates & numeric
-                df_upload = parse_dates(df_upload, DATE_COLS)
-                df_upload = normalize_numeric(df_upload, NUM_COLS)
-
-                # Upload button
                 if st.button("💾 Save to Database", type="primary", use_container_width=True):
                     with st.spinner("Processing and saving data to database..."):
+                        # Normalisasi
+                        df_upload.columns = [c.strip().lower() for c in df_upload.columns]
+
+                        valid_columns = [
+                            # kolom yang kamu definisikan di create_db.py (lowercase semua)
+                            'std_transaction_date','std_vendor','std_identifier','std_username',
+                            'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
+                            'std_balance_joiner','std_vendor_settled_date',
+                            'id','created','create_by','last_updated','last_update_by','tx_id',
+                            'tx_type','username','amount','balance_flow','balance_before','balance_after',
+                            'description','used_overdraft_before','used_overdraft_after','service_fee_paid',
+                            'transaction_fee_paid','service_fee_before','service_fee_after',
+                            'pending_balance_after','pending_balance_before','admin_fee','transfer_amount',
+                            'freeze_balance_before','freeze_balance_after','recon_balance_status'
+                        ]
+                        df_upload = df_upload[[c for c in df_upload.columns if c in valid_columns]]
+
+                        # parse tanggal
+                        df_upload = parse_dates(df_upload, ["std_transaction_date", "std_vendor_settled_date", "created", "last_updated"])
+
+                        # numeric sanitize
+                        for nc in [
+                            'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
+                            'amount','balance_before','balance_after','used_overdraft_before','used_overdraft_after',
+                            'service_fee_paid','transaction_fee_paid','service_fee_before','service_fee_after',
+                            'pending_balance_after','pending_balance_before','admin_fee','transfer_amount',
+                            'freeze_balance_before','freeze_balance_after'
+                        ]:
+                            if nc in df_upload.columns:
+                                df_upload[nc] = pd.to_numeric(
+                                    pd.Series(df_upload[nc]).astype(str).str.replace(",", "", regex=False).str.replace(" ", "", regex=False),
+                                    errors="coerce"
+                                )
+
+                        unique_col = unique_column.lower()
+
                         if duplicate_action == "Add All (Allow Duplicates)":
                             with engine.begin() as conn:
-                                df_upload.to_sql(TABLE, conn, if_exists="append", index=False, schema=SCHEMA)
-                            uploaded_count = len(df_upload)
-                            duplicate_count = 0
+                                df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
+                            uploaded_count = len(df_upload); duplicate_count = 0
                         else:
-                            # ambil id existing
-                            if 'id' not in df_upload.columns:
-                                raise ValueError("Kolom 'id' wajib ada di file untuk UPSERT.")
-
-                            unique_values = df_upload['id'].dropna().astype(str).unique()
-                            with engine.connect() as conn:
-                                if len(unique_values) == 0:
-                                    existing_ids = set()
-                                else:
-                                    vals = "', '".join(v.replace("'", "''") for v in unique_values)
-                                    existing_query = f"""
-                                        SELECT id FROM {tbl(TABLE)}
-                                        WHERE id IN ('{vals}')
-                                    """
-                                    try:
-                                        existing_df = pd.read_sql(text(existing_query), conn)
-                                        existing_ids = set(existing_df['id'].astype(str).values)
-                                    except Exception:
+                            if unique_col in df_upload.columns:
+                                keys = df_upload[unique_col].dropna().astype(str).unique().tolist()
+                                with engine.connect() as conn:
+                                    if not keys:
                                         existing_ids = set()
+                                    else:
+                                        vals = "', '".join(k.replace("'", "''") for k in keys)
+                                        q = f"SELECT DISTINCT {unique_col} FROM {tbl('reconciliation')} WHERE {unique_col} IN ('{vals}')"
+                                        try:
+                                            ex = pd.read_sql(text(q), conn)
+                                            existing_ids = set(ex[unique_col].astype(str).tolist())
+                                        except Exception:
+                                            existing_ids = set()
 
-                            df_upload['__is_dup'] = df_upload['id'].astype(str).isin(existing_ids)
-                            duplicates = df_upload[df_upload['__is_dup']]
-                            new_records = df_upload[~df_upload['__is_dup']]
-                            duplicate_count = len(duplicates)
+                                df_upload["__dup"] = df_upload[unique_col].astype(str).isin(existing_ids)
+                                duplicates = df_upload[df_upload["__dup"]]
+                                new_records = df_upload[~df_upload["__dup"]]
+                                duplicate_count = len(duplicates)
 
-                            if duplicate_action == "Skip Duplicates":
-                                if len(new_records) > 0:
-                                    with engine.begin() as conn:
-                                        new_records.drop(columns='__is_dup').to_sql(
-                                            TABLE, conn, if_exists="append", index=False, schema=SCHEMA
-                                        )
-                                uploaded_count = len(new_records)
+                                if duplicate_action == "Skip Duplicates":
+                                    if not new_records.empty:
+                                        with engine.begin() as conn:
+                                            new_records.drop(columns="__dup").to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
+                                    uploaded_count = len(new_records)
 
-                            elif duplicate_action == "Update Existing":
-                                # insert baru
-                                if len(new_records) > 0:
-                                    with engine.begin() as conn:
-                                        new_records.drop(columns='__is_dup').to_sql(
-                                            TABLE, conn, if_exists="append", index=False, schema=SCHEMA
-                                        )
-                                # upsert baris duplikat
-                                if len(duplicates) > 0:
-                                    duplicates_clean = duplicates.drop(columns='__is_dup')
-                                    with engine.begin() as conn:
-                                        # tmp table di default schema (tanpa schema=SCHEMA agar gampang drop)
-                                        duplicates_clean.to_sql("temp_reconciliation", conn, if_exists="replace", index=False)
-                                        columns = list(duplicates_clean.columns)
-                                        columns_str = ', '.join(columns)
-                                        update_str = ', '.join([f"{col} = EXCLUDED.{col}" for col in columns if col != 'id'])
-                                        upsert_query = f"""
-                                            INSERT INTO {tbl(TABLE)} ({columns_str})
-                                            SELECT {columns_str} FROM temp_reconciliation
-                                            ON CONFLICT (id) DO UPDATE SET {update_str}
-                                        """
-                                        conn.execute(text(upsert_query))
-                                        conn.execute(text("DROP TABLE IF EXISTS temp_reconciliation"))
-                                uploaded_count = len(df_upload)
+                                else:  # Update Existing
+                                    if not new_records.empty:
+                                        with engine.begin() as conn:
+                                            new_records.drop(columns="__dup").to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
+                                    if not duplicates.empty:
+                                        dup_clean = duplicates.drop(columns="__dup")
+                                        with engine.begin() as conn:
+                                            dup_clean.to_sql("temp_reconciliation", conn, if_exists="replace", index=False)
+                                            cols = list(dup_clean.columns)
+                                            columns_str = ", ".join(cols)
+                                            update_str = ", ".join([f"{c} = EXCLUDED.{c}" for c in cols if c != unique_col])
+                                            upsert = f"""
+                                                INSERT INTO {tbl('reconciliation')} ({columns_str})
+                                                SELECT {columns_str} FROM temp_reconciliation
+                                                ON CONFLICT ({unique_col}) DO UPDATE SET {update_str}
+                                            """
+                                            conn.execute(text(upsert))
+                                            conn.execute(text("DROP TABLE temp_reconciliation"))
+                                    uploaded_count = len(df_upload)
+                                df_upload.drop(columns="__dup", inplace=True)
+                            else:
+                                with engine.begin() as conn:
+                                    df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
+                                uploaded_count = len(df_upload); duplicate_count = 0
 
-                            df_upload.drop(columns='__is_dup', inplace=True, errors='ignore')
-
-                        # Messages
+                        # message
                         if duplicate_count > 0:
                             if duplicate_action == "Skip Duplicates":
-                                st.success(f"✅ Uploaded {uploaded_count:,} new records. Skipped {duplicate_count:,} duplicates.")
+                                st.success(f"✅ Uploaded {uploaded_count:,} new | Skipped {duplicate_count:,} dup.")
                             elif duplicate_action == "Update Existing":
-                                st.success(f"✅ Processed {uploaded_count:,} rows. Updated {duplicate_count:,} existing rows.")
+                                st.success(f"✅ Processed {uploaded_count:,} | Updated {duplicate_count:,} existing.")
                             else:
-                                st.success(f"✅ Uploaded {uploaded_count:,} records!")
+                                st.success(f"✅ Uploaded {uploaded_count:,}.")
                         else:
-                            st.success(f"✅ Uploaded {uploaded_count:,} new records.")
+                            st.success(f"✅ Uploaded {uploaded_count:,} rows.")
+
+                        if duplicate_count > 0:
+                            c1, c2, c3 = st.columns(3)
+                            with c1: st.metric("Total Rows", f"{len(df_upload):,}")
+                            with c2: st.metric("New Rows", f"{uploaded_count:,}")
+                            with c3: st.metric("Duplicates", f"{duplicate_count:,}")
 
             except Exception as e:
                 st.error(f"❌ Error processing file: {e}")
 
-elif st.session_state.current_page == 'Visualization':
-    # ======================
-    # VISUALIZATION PAGE
-    # ======================
-    st.title("📊 Data Visualization")
-    st.caption("Visual analytics of reconciliation data")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Pull last 60 days by std_transaction_date
+elif st.session_state.current_page == 'Visualization':
+    st.title("📊 Data Visualization")
+    st.markdown('<p class="subtitle">Visual analytics of reconciliation data</p>', unsafe_allow_html=True)
+
     try:
         with engine.connect() as conn:
             df_viz = pd.read_sql(text(f"""
-                SELECT {", ".join(set(FRONTEND_COLS + ["last_updated","amount"]))}
-                FROM {tbl(TABLE)}
-                WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '60 days'
+                SELECT std_transaction_date, std_vendor, std_identifier, std_amount, std_vendor_settled_date, last_updated
+                FROM {tbl('reconciliation')}
+                WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '30 days'
             """), conn)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df_viz = pd.DataFrame()
 
     if not df_viz.empty:
-        df_viz = parse_dates(df_viz, DATE_COLS)
-        df_viz = normalize_numeric(df_viz, NUM_COLS)
+        df_viz = parse_dates(df_viz, ["std_transaction_date","std_vendor_settled_date","last_updated"])
 
-        # A. Sum by std_transaction_date (std_amount)
-        a = sum_by_std_transaction_date(df_viz)
-        fig_a = px.bar(a, x='date', y='sum_std_amount', title="SUM(std_amount) by std_transaction_date")
-        st.plotly_chart(fig_a, use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 📈 Sum std_amount by std_transaction_date")
+            g1 = safe_sum_by_date(df_viz, "std_transaction_date")
+            fig1 = px.line(g1, x="date", y="sum_std_amount")
+            fig1.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
+            st.plotly_chart(fig1, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # B. Sum by std_vendor_settled_date (std_amount - std_vendor_cost)
-        b = sum_by_std_vendor_settled_date(df_viz)
-        fig_b = px.bar(b, x='date', y='sum_net_vendor', title="SUM(std_amount - std_vendor_cost) by std_vendor_settled_date")
-        st.plotly_chart(fig_b, use_container_width=True)
+        with col2:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 📈 Sum std_amount by std_vendor_settled_date")
+            g2 = safe_sum_by_date(df_viz, "std_vendor_settled_date")
+            fig2 = px.line(g2, x="date", y="sum_std_amount")
+            fig2.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
+            st.plotly_chart(fig2, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # C. Sum by last_updated date (amount)
-        c = sum_by_last_updated_date(df_viz)
-        fig_c = px.line(c, x='date', y='sum_amount', title="SUM(amount) by last_updated (date)")
-        st.plotly_chart(fig_c, use_container_width=True)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 📈 Sum std_amount by last_updated (date)")
+        g3 = safe_sum_by_date(df_viz, "last_updated")
+        fig3 = px.bar(g3, x="date", y="sum_std_amount")
+        fig3.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
+        st.plotly_chart(fig3, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        # D. Starting/Ending balances by last_updated
-        se = compute_start_end_balances(df_viz)
-        st.markdown("### 🧮 Daily Starting / Ending Balance (by last_updated)")
-        if not se.empty:
-            st.dataframe(se, use_container_width=True, height=300)
+        # starting/ending per hari
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 🧮 Daily Starting/Ending Balance (by last_updated)")
+        # kebutuhan balance: ambil kolom balance_before/after, kalau ga ada di SELECT atas, tarik lagi ringkas
+        if not set(["balance_before","balance_after"]).issubset(df_viz.columns):
+            try:
+                with engine.connect() as conn:
+                    df_bal = pd.read_sql(text(f"""
+                        SELECT last_updated, balance_before, balance_after
+                        FROM {tbl('reconciliation')}
+                        WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '30 days'
+                    """), conn)
+                df_viz = df_viz.merge(df_bal, how="left", on="last_updated")
+            except:
+                pass
+        dtable = daily_start_end_table(df_viz)
+        if not dtable.empty:
+            st.dataframe(dtable, use_container_width=True)
         else:
-            st.info("No enough data to compute start/end balance.")
+            st.info("Data tidak cukup untuk menghitung starting/ending balance harian.")
+        st.markdown('</div>', unsafe_allow_html=True)
     else:
-        st.info("📊 No data available for visualization. Please upload data first.")
+        st.info("📊 No data available for visualization. Please upload or widen your filters.")
 
 else:
-    # ======================
-    # DASHBOARD PAGE (DEFAULT)
-    # ======================
+    # ============= DASHBOARD =============
     st.title("📊 Reconciliation Dashboard")
-    st.caption("Monitor and analyze your reconciliation data")
+    st.markdown('<p class="subtitle">Monitor and analyze your reconciliation data</p>', unsafe_allow_html=True)
 
-    # ---------- Filters ----------
+    # -------- Filters --------
     with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🔍 Filters")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            start_date = st.date_input("Start Date (std_transaction_date)", value=date(date.today().year, 1, 1))
+            start_date = st.date_input("Start Date", value=date(2025,1,1))
         with col2:
-            end_date = st.date_input("End Date (std_transaction_date)", value=date.today())
+            end_date = st.date_input("End Date", value=date.today())
         with col3:
-            f_vendor = st.text_input("std_vendor (contains)")
+            f_vendor = st.text_input("std_vendor")
         with col4:
-            f_identifier = st.text_input("std_identifier (contains)")
-
-        col5, _c6, _c7, _c8 = st.columns(4)
+            f_identifier = st.text_input("std_identifier")
+        col5, _ = st.columns([1,3])
         with col5:
-            f_balance_joiner = st.text_input("std_balance_joiner (contains)")
+            f_balance_joiner = st.text_input("std_balance_joiner")
 
-    # ---------- Query data ----------
-    query = f"""
-        SELECT {", ".join(set(FRONTEND_COLS + ["last_updated","amount","balance_before","balance_after"]))}
-        FROM {tbl(TABLE)}
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # -------- Query data --------
+    base_query = f"""
+        SELECT 
+          std_transaction_date, std_vendor, std_identifier, std_username,
+          std_admin_fee, std_admin_fee_invoice, std_amount, std_vendor_cost,
+          std_balance_joiner, std_vendor_settled_date,
+          last_updated, balance_before, balance_after
+        FROM {tbl('reconciliation')}
         WHERE std_transaction_date BETWEEN :start_date AND :end_date
     """
     params = {"start_date": start_date, "end_date": end_date}
     if f_vendor:
-        query += " AND std_vendor ILIKE :vendor"
+        base_query += " AND std_vendor ILIKE :vendor"
         params["vendor"] = f"%{f_vendor}%"
     if f_identifier:
-        query += " AND std_identifier ILIKE :identifier"
-        params["identifier"] = f"%{f_identifier}%"
+        base_query += " AND std_identifier ILIKE :ident"
+        params["ident"] = f"%{f_identifier}%"
     if f_balance_joiner:
-        query += " AND std_balance_joiner ILIKE :bj"
+        base_query += " AND std_balance_joiner ILIKE :bj"
         params["bj"] = f"%{f_balance_joiner}%"
 
     try:
         with engine.connect() as conn:
-            df = pd.read_sql(text(query), conn, params=params)
+            df = pd.read_sql(text(base_query), conn, params=params)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df = pd.DataFrame()
 
+    # -------- Show data + Metrics --------
+    show_cols = [
+        'std_transaction_date','std_vendor','std_identifier','std_username',
+        'std_admin_fee','std_admin_fee_invoice','std_amount',
+        'std_vendor_cost','std_balance_joiner','std_vendor_settled_date'
+    ]
+
     if not df.empty:
-        df = parse_dates(df, DATE_COLS)
-        df = normalize_numeric(df, NUM_COLS)
+        df = parse_dates(df, ["std_transaction_date","std_vendor_settled_date","last_updated"])
 
-        # ---------- Summary Metrics ----------
+        # summary metrics
         with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 📈 Summary Metrics")
-            colm = st.columns(4)
+
             total_records = len(df)
-            total_std_amount = df['std_amount'].sum() if 'std_amount' in df.columns else 0
-            net_vendor = (df['std_amount'].fillna(0) - df['std_vendor_cost'].fillna(0)).sum() if {'std_amount','std_vendor_cost'}.issubset(df.columns) else 0
-            sum_amount_by_last = df['amount'].sum() if 'amount' in df.columns else 0
+            total_amount = float(df['std_amount'].sum()) if 'std_amount' in df.columns else 0.0
+            start_bal, end_bal = compute_start_end_balance(df)
 
-            with colm[0]: st.metric("Total Records", f"{total_records:,}")
-            with colm[1]: st.metric("Σ std_amount", f"{total_std_amount:,.0f}")
-            with colm[2]: st.metric("Σ (std_amount - std_vendor_cost)", f"{net_vendor:,.0f}")
-            with colm[3]: st.metric("Σ amount (by last_updated)", f"{sum_amount_by_last:,.0f}")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.metric("Total Records", f"{total_records:,}")
+            with c2: st.metric("Sum std_amount", f"{total_amount:,.2f}")
+            with c3: st.metric("Starting Balance", "-" if start_bal is None else f"{start_bal:,.2f}")
+            with c4: st.metric("Ending Balance", "-" if end_bal is None else f"{end_bal:,.2f}")
 
-        # ---------- Aggregation Cards ----------
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # sum(std_amount) by std_transaction_date, std_vendor_settled_date, last_updated(date)
         with st.container():
-            st.markdown("### 📆 Sum by Key Dates")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 🧮 Sum std_amount by Key Dates")
+
             c1, c2, c3 = st.columns(3)
+            g1 = safe_sum_by_date(df, "std_transaction_date")
+            g2 = safe_sum_by_date(df, "std_vendor_settled_date")
+            g3 = safe_sum_by_date(df, "last_updated")
 
             with c1:
-                st.markdown("**By `std_transaction_date`**")
-                a = sum_by_std_transaction_date(df)
-                if not a.empty:
-                    st.dataframe(a, use_container_width=True, height=220)
-                else:
-                    st.info("No data")
+                st.markdown("**By std_transaction_date**")
+                if not g1.empty: st.dataframe(g1, use_container_width=True, height=260)
+                else: st.caption("No data")
 
             with c2:
-                st.markdown("**By `std_vendor_settled_date`** *(std_amount − std_vendor_cost)*")
-                b = sum_by_std_vendor_settled_date(df)
-                if not b.empty:
-                    st.dataframe(b, use_container_width=True, height=220)
-                else:
-                    st.info("No data")
+                st.markdown("**By std_vendor_settled_date**")
+                if not g2.empty: st.dataframe(g2, use_container_width=True, height=260)
+                else: st.caption("No data")
 
             with c3:
-                st.markdown("**By `last_updated` (date)** *(sum of `amount`)*")
-                c = sum_by_last_updated_date(df)
-                if not c.empty:
-                    st.dataframe(c, use_container_width=True, height=220)
-                else:
-                    st.info("No data")
+                st.markdown("**By last_updated (date)**")
+                if not g3.empty: st.dataframe(g3, use_container_width=True, height=260)
+                else: st.caption("No data")
 
-        # ---------- Starting / Ending Balance ----------
-        with st.container():
-            st.markdown("### 🧮 Daily Starting / Ending Balance (by `last_updated`)")
-            se = compute_start_end_balances(df)
-            if not se.empty:
-                # highlight latest day
-                latest = se.dropna(subset=['ending_balance']).tail(1)
-                if not latest.empty:
-                    ld = latest.iloc[0]
-                    cols = st.columns(3)
-                    with cols[0]: st.metric("Latest Day", f"{ld['date']}")
-                    with cols[1]: st.metric("Starting", f"{(ld['starting_balance'] if pd.notna(ld['starting_balance']) else 0):,.0f}")
-                    with cols[2]: st.metric("Ending", f"{(ld['ending_balance'] if pd.notna(ld['ending_balance']) else 0):,.0f}")
-                st.dataframe(se, use_container_width=True, height=300)
-            else:
-                st.info("No enough data to compute start/end balance.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # ---------- Data Table (columns requested) ----------
+        # daily starting/ending table (opsional)
         with st.container():
-            st.markdown("### 📋 Reconciliation Data (Selected Columns)")
-            show_cols = [c for c in FRONTEND_COLS if c in df.columns]
-            if show_cols:
-                st.dataframe(df[show_cols], use_container_width=True, height=420)
-                st.download_button(
-                    "📥 Download Selected Columns",
-                    df[show_cols].to_csv(index=False),
-                    f"reconciliation_selected_{datetime.now().strftime('%Y%m%d')}.csv",
-                    "text/csv"
-                )
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 📅 Daily Starting/Ending Balance (by last_updated)")
+            dtable = daily_start_end_table(df)
+            if not dtable.empty:
+                st.dataframe(dtable, use_container_width=True, height=280)
             else:
-                st.info("Selected columns not found in dataset.")
+                st.caption("Tidak ada data balance yang cukup untuk dirangkum harian.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # main data table (hanya kolom yang kamu minta)
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 📋 Reconciliation Data (Selected Fields)")
+            present_cols = [c for c in show_cols if c in df.columns]
+            st.dataframe(df[present_cols].sort_values("std_transaction_date", na_position="last"), use_container_width=True, height=420)
+            st.download_button(
+                "📥 Download Visible Fields",
+                df[present_cols].to_csv(index=False),
+                f"reconciliation_selected_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+
     else:
         st.info("🔍 No data found. Please check your filters or upload data first.")
