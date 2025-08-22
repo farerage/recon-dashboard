@@ -1,7 +1,8 @@
+# app.py
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-from datetime import datetime
+from datetime import datetime, date
 import plotly.express as px
 import config
 
@@ -20,11 +21,10 @@ def tbl(name: str) -> str:
     return f'{SCHEMA}.{name}'
 
 def ensure_schema(engine, schema: str):
-    """Create schema if not exists (safe to run repeatedly)."""
+    """Create schema if not exists (safe)."""
     with engine.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}";'))
 
-# Pastikan schema tersedia kalau bukan 'public'
 if SCHEMA != "public":
     try:
         ensure_schema(engine, SCHEMA)
@@ -32,278 +32,47 @@ if SCHEMA != "public":
         st.info(f"Note: gagal membuat schema {SCHEMA}: {e}. Pastikan role DB-mu punya izin.")
 
 # ======================
-# CUSTOM CSS - Paper.id Style
-# ======================
-st.markdown("""
-<style>
-/* =========================================================
-   Pro Light Theme for Streamlit Dashboards
-   - High contrast, clean, modern, eye-catching
-   - Easy theming via CSS variables
-   - Works across sidebar, tabs, tables, metrics, uploader
-   ========================================================= */
-
-/* ---------- Theme Tokens (Light) ---------- */
-:root{
-  /* Brand accents */
-  --brand-1: #2563eb; /* blue */
-  --brand-2: #22c55e; /* green */
-  --brand-3: #7c3aed; /* violet */
-  --brand-4: #f43f5e; /* rose */
-
-  /* Base */
-  --bg: #f7f9fc;              /* page background */
-  --bg-grad-1: #ffffff;       /* soft gradient start */
-  --bg-grad-2: #eef3ff;       /* soft gradient end */
-  --surface-1: #ffffff;       /* cards */
-  --surface-2: #f5f7fb;       /* subtle fills */
-  --surface-3: #eef2f7;       /* table header */
-  --glass: rgba(255,255,255,.85);
-
-  /* Text */
-  --text-1: #0f172a;          /* primary text (near-black) */
-  --text-2: #334155;          /* secondary */
-  --text-3: #64748b;          /* muted */
-
-  /* Lines / Effects */
-  --line-1: rgba(15, 23, 42, .10);
-  --line-2: rgba(37, 99, 235, .35);
-
-  /* States */
-  --success: #16a34a;
-  --danger: #dc2626;
-  --info: #2563eb;
-  --warning: #d97706;
-
-  /* Radii & shadows */
-  --radius-lg: 18px;
-  --radius-md: 12px;
-  --radius-sm: 10px;
-  --shadow-1: 0 10px 30px rgba(2, 6, 23, .06);
-  --shadow-2: 0 16px 40px rgba(2, 6, 23, .08);
-}
-
-/* ---------- App Background ---------- */
-.stApp{
-  background: linear-gradient(180deg, var(--bg-grad-1), var(--bg-grad-2) 60%, var(--bg)) fixed;
-  color: var(--text-1);
-  font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;
-}
-
-/* Container padding */
-.block-container{
-  padding-top: 1.2rem;
-  padding-bottom: 1.6rem;
-}
-
-/* ---------- Sidebar ---------- */
-section[data-testid="stSidebar"]{
-  background: var(--surface-1) !important;
-  border-right: 1px solid var(--line-1);
-  box-shadow: var(--shadow-1);
-}
-.nav-title{
-  font-family: 'Space Grotesk', sans-serif;
-  font-weight: 800;
-  letter-spacing: .2px;
-  text-align: center;
-  margin: .25rem 0 1rem;
-  font-size: 1.05rem;
-  background: linear-gradient(90deg, var(--brand-1), var(--brand-3));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* ---------- Headings ---------- */
-h1{
-  font-family: 'Space Grotesk', sans-serif !important;
-  font-weight: 900 !important;
-  letter-spacing: .2px;
-  font-size: clamp(2rem, 3vw, 3rem) !important;
-  text-align: center !important;
-  margin: .3rem 0 1rem !important;
-  color: var(--text-1) !important;
-}
-.subtitle{
-  color: var(--text-2) !important;
-  text-align: center !important;
-  font-size: 1.05rem !important;
-  margin-bottom: 1.2rem !important;
-}
-
-/* ---------- Buttons ---------- */
-.stButton > button{
-  width: 100% !important;
-  border-radius: var(--radius-md) !important;
-  padding: .8rem 1.1rem !important;
-  font-weight: 700 !important;
-  border: 1px solid var(--line-1) !important;
-  color: var(--text-1) !important;
-  background: linear-gradient(180deg, #fff, var(--surface-2)) !important;
-  box-shadow: var(--shadow-1) !important;
-  transition: transform .15s ease, box-shadow .2s ease, border-color .2s ease !important;
-}
-.stButton > button:hover{
-  transform: translateY(-1px);
-  border-color: var(--line-2) !important;
-  box-shadow: var(--shadow-2) !important;
-}
-.stButton > button:active{ transform: translateY(0); }
-
-.stButton > button[kind="primary"]{
-  background: linear-gradient(135deg, var(--brand-1), var(--brand-3)) !important;
-  color: #fff !important;
-  border: none !important;
-}
-.stButton > button[kind="primary"]:hover{ filter: brightness(1.05); }
-
-/* ---------- Cards ---------- */
-.card{
-  background: var(--surface-1);
-  border: 1px solid var(--line-1);
-  border-radius: var(--radius-lg);
-  padding: 1.4rem;
-  margin: 1rem 0;
-  box-shadow: var(--shadow-1);
-  position: relative;
-}
-.card::before{
-  content:"";
-  position:absolute; inset: 0 0 auto 0; height: 3px;
-  background: linear-gradient(90deg, var(--brand-1), var(--brand-3));
-  border-top-left-radius: var(--radius-lg);
-  border-top-right-radius: var(--radius-lg);
-  opacity:.85;
-}
-
-/* Section titles inside card */
-.card h3{
-  font-family: 'Space Grotesk', sans-serif !important;
-  font-weight: 800 !important;
-  font-size: 1.1rem !important;
-  color: var(--text-1) !important;
-  margin: .2rem 0 1rem !important;
-}
-
-/* ---------- Inputs ---------- */
-.stTextInput input, .stDateInput input, .stSelectbox select{
-  background: #fff !important;
-  border: 1px solid var(--line-1) !important;
-  color: var(--text-1) !important;
-  border-radius: var(--radius-sm) !important;
-  padding: .65rem .85rem !important;
-  box-shadow: inset 0 1px 0 rgba(2, 6, 23, .03);
-}
-.stTextInput input:focus, .stDateInput input:focus, .stSelectbox select:focus{
-  outline: none !important;
-  border-color: var(--line-2) !important;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, .12) !important;
-}
-
-/* ---------- Tabs ---------- */
-.stTabs [data-baseweb="tab-list"]{
-  background: var(--surface-2) !important;
-  border: 1px solid var(--line-1) !important;
-  border-radius: var(--radius-md) !important;
-  padding: .35rem !important;
-}
-.stTabs [data-baseweb="tab"]{
-  color: var(--text-3) !important;
-  font-weight: 700 !important;
-  border-radius: 10px !important;
-  padding: .55rem .9rem !important;
-}
-.stTabs [aria-selected="true"]{
-  color: #fff !important;
-  background: linear-gradient(135deg, var(--brand-1), var(--brand-2)) !important;
-  box-shadow: 0 10px 22px -12px rgba(37, 99, 235, .35) !important;
-}
-
-/* ---------- Dataframe/Table ---------- */
-.stDataFrame, .stTable{
-  border: 1px solid var(--line-1) !important;
-  border-radius: var(--radius-md) !important;
-  overflow: hidden !important;
-  background: var(--surface-1) !important;
-  box-shadow: var(--shadow-1);
-}
-[data-testid="stStyledTable"] thead tr th{
-  background: var(--surface-3) !important;
-  color: var(--text-1) !important;
-  font-weight: 800 !important;
-  border-bottom: 1px solid var(--line-1) !important;
-}
-[data-testid="stStyledTable"] tbody tr td{
-  color: var(--text-2) !important;
-  border-bottom: 1px solid rgba(15,23,42,.06) !important;
-}
-[data-testid="stStyledTable"] tbody tr:hover td{
-  background: #f0f4ff !important;
-}
-
-/* ---------- Metrics ---------- */
-[data-testid="metric-container"]{
-  background: linear-gradient(180deg, #fff, var(--surface-2)) !important;
-  border: 1px solid var(--line-1) !important;
-  border-radius: var(--radius-md) !important;
-  padding: .9rem 1.1rem !important;
-  box-shadow: var(--shadow-1);
-  transition: transform .15s ease;
-}
-[data-testid="metric-container"]:hover{
-  transform: translateY(-2px);
-}
-
-/* ---------- Alerts ---------- */
-.stAlert{
-  border-radius: var(--radius-md) !important;
-  border: 1px solid var(--line-1) !important;
-  background: #fff !important;
-  box-shadow: var(--shadow-1);
-}
-.stSuccess{ border-left: 4px solid var(--success) !important; }
-.stError{ border-left: 4px solid var(--danger) !important; }
-.stInfo{ border-left: 4px solid var(--info) !important; }
-
-/* ---------- File Uploader ---------- */
-.stFileUploader > div{
-  border: 2px dashed rgba(37,99,235,.25) !important;
-  border-radius: var(--radius-lg) !important;
-  padding: 2rem !important;
-  background: var(--surface-2) !important;
-  transition: transform .15s ease, box-shadow .2s ease, border-color .2s ease;
-}
-.stFileUploader > div:hover{
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-1);
-  border-color: rgba(37,99,235,.45) !important;
-}
-
-/* ---------- Scrollbars ---------- */
-::-webkit-scrollbar{ width: 10px; height: 10px; }
-::-webkit-scrollbar-track{ background: #e8edf6; border-radius: 6px; }
-::-webkit-scrollbar-thumb{
-  background: linear-gradient(180deg, var(--brand-1), var(--brand-3));
-  border-radius: 6px;
-}
-::-webkit-scrollbar-thumb:hover{ filter: brightness(1.05); }
-
-/* ---------- Hide Streamlit Branding ---------- */
-#MainMenu{ visibility: hidden; }
-footer{ visibility: hidden; }
-header{ visibility: hidden; }
-</style>
-
-<!-- fonts -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&family=Space+Grotesk:wght@700;800;900&display=swap" rel="stylesheet">
-""", unsafe_allow_html=True)
-
-
-
-# ======================
-# PAGE CONFIG
+# THEME / CSS
 # ======================
 st.set_page_config(page_title="Reconciliation Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+:root{
+  --brand-1:#2563eb; --brand-2:#22c55e; --brand-3:#7c3aed;
+  --bg:#f7f9fc; --bg2:#eef3ff; --surface:#ffffff; --surface2:#f5f7fb;
+  --text-1:#0f172a; --text-2:#334155; --text-3:#64748b;
+  --line:#e5e7eb; --radius:14px; --shadow:0 10px 30px rgba(2,6,23,.06);
+}
+.stApp{background: linear-gradient(180deg,#fff,var(--bg2) 60%,var(--bg)) fixed; color:var(--text-1);
+font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial;}
+.block-container{padding-top:1rem; padding-bottom:1rem;}
+section[data-testid="stSidebar"]{background:var(--surface) !important; border-right:1px solid var(--line); box-shadow:var(--shadow);}
+.nav-title{font-family:'Space Grotesk',sans-serif; font-weight:800; text-align:center; margin:.25rem 0 1rem;
+background:linear-gradient(90deg,var(--brand-1),var(--brand-3)); -webkit-background-clip:text; -webkit-text-fill-color:transparent;}
+h1{font-family:'Space Grotesk',sans-serif !important; font-weight:900 !important; text-align:center !important;
+font-size:clamp(2rem,3vw,3rem) !important; margin:.25rem 0 .75rem !important;}
+.subtitle{color:var(--text-2); text-align:center; margin-bottom:1rem;}
+.stButton > button{width:100%; border-radius:12px !important; padding:.7rem 1rem !important; font-weight:700 !important;
+border:1px solid var(--line) !important; background:linear-gradient(180deg,#fff,var(--surface2)) !important; box-shadow:var(--shadow) !important;}
+.stButton > button[kind="primary"]{background:linear-gradient(135deg,var(--brand-1),var(--brand-3)) !important; color:#fff !important; border:none !important;}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:1.2rem; margin:1rem 0; box-shadow:var(--shadow); position:relative;}
+.card::before{content:""; position:absolute; inset:0 0 auto 0; height:3px; background:linear-gradient(90deg,var(--brand-1),var(--brand-3)); border-top-left-radius:18px; border-top-right-radius:18px; opacity:.9;}
+.stTextInput input, .stDateInput input, .stSelectbox select{background:#fff !important; border:1px solid var(--line) !important;
+border-radius:10px !important; padding:.6rem .8rem !important;}
+.stTabs [data-baseweb="tab-list"]{background:var(--surface2) !important; border:1px solid var(--line) !important; border-radius:12px !important; padding:.3rem !important;}
+.stTabs [data-baseweb="tab"]{color:var(--text-3) !important; font-weight:700 !important; border-radius:10px !important; padding:.5rem .8rem !important;}
+.stTabs [aria-selected="true"]{color:#fff !important; background:linear-gradient(135deg,var(--brand-1),var(--brand-2)) !important;}
+.stDataFrame, .stTable{border:1px solid var(--line) !important; border-radius:12px !important; overflow:hidden !important; background:var(--surface) !important;}
+/* Metric smaller font */
+[data-testid="metric-container"]{background:linear-gradient(180deg,#fff,var(--surface2)) !important; border:1px solid var(--line) !important;
+border-radius:12px !important; padding:.7rem .9rem !important;}
+div[data-testid="stMetricValue"]{font-size:1.1rem !important; line-height:1.15 !important;}
+div[data-testid="stMetricLabel"]{font-size:.78rem !important; color:var(--text-3) !important;}
+#MainMenu, footer, header{visibility:hidden;}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&family=Space+Grotesk:wght@700;800;900&display=swap" rel="stylesheet">
+""", unsafe_allow_html=True)
 
 # ======================
 # SIDEBAR NAVIGATION
@@ -324,36 +93,93 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📈 Quick Stats")
+    # Quick stats: 7 hari terakhir by std_transaction_date
     try:
         with engine.connect() as conn:
-            quick_stats = pd.read_sql(text(f"""
+            qs = pd.read_sql(text(f"""
                 SELECT 
-                    COUNT(*) as total_records,
-                    COUNT(CASE WHEN recon_status = 'Reconciled' THEN 1 END) as reconciled,
-                    COUNT(CASE WHEN recon_status = 'Unreconciled' THEN 1 END) as unreconciled
+                  COUNT(*) AS total_records,
+                  COALESCE(SUM(std_amount),0) AS total_amount
                 FROM {tbl('reconciliation')}
-                WHERE transaction_date_dash >= CURRENT_DATE - INTERVAL '7 days'
+                WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '7 days'
             """), conn)
-            if not quick_stats.empty:
-                st.metric("Records (7d)", f"{quick_stats.iloc[0]['total_records']:,}")
-                st.metric("Reconciled", f"{quick_stats.iloc[0]['reconciled']:,}")
-                st.metric("Unreconciled", f"{quick_stats.iloc[0]['unreconciled']:,}")
+            if not qs.empty:
+                st.metric("Records (7d)", f"{qs.iloc[0]['total_records']:,}")
+                st.metric("Sum Amount (7d)", f"{float(qs.iloc[0]['total_amount']):,.2f}")
     except Exception as e:
         st.info(f"Connect to view stats (schema={SCHEMA}). Detail: {e}")
 
-# Label menu (opsional dipakai)
-selected_menu = (
-    f"📊 {st.session_state.current_page}" if st.session_state.current_page == 'Dashboard'
-    else f"📤 {st.session_state.current_page}" if st.session_state.current_page == 'Upload Data'
-    else f"📈 {st.session_state.current_page}"
-)
+# ======================
+# HELPERS
+# ======================
+def parse_dates(df: pd.DataFrame, cols):
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+def coalesce(a, b):
+    return a if pd.notna(a) else b
+
+def compute_start_end_balance(df: pd.DataFrame):
+    """
+    Starting = balance_after (fallback balance_before) pada earliest last_updated
+    Ending   = balance_after (fallback balance_before) pada latest last_updated
+    """
+    if df.empty or "last_updated" not in df.columns:
+        return None, None
+    tmp = df.copy()
+    tmp = parse_dates(tmp, ["last_updated"])
+    tmp = tmp.sort_values("last_updated")
+    # ambil first/last row yg punya nilai salah satu balance
+    first = tmp.loc[tmp[["balance_after","balance_before"]].notna().any(axis=1)].head(1)
+    last  = tmp.loc[tmp[["balance_after","balance_before"]].notna().any(axis=1)].tail(1)
+    if first.empty or last.empty:
+        return None, None
+    start_val = coalesce(first.iloc[0].get("balance_after"), first.iloc[0].get("balance_before"))
+    end_val   = coalesce(last.iloc[0].get("balance_after"),  last.iloc[0].get("balance_before"))
+    try:
+        start_val = float(start_val) if start_val is not None else None
+        end_val   = float(end_val) if end_val is not None else None
+    except Exception:
+        pass
+    return start_val, end_val
+
+def daily_start_end_table(df: pd.DataFrame):
+    """
+    Buat tabel per-hari (berdasarkan tanggal last_updated) untuk starting & ending balance.
+    """
+    if df.empty or "last_updated" not in df.columns:
+        return pd.DataFrame()
+    d = df.copy()
+    d = parse_dates(d, ["last_updated"])
+    d["lu_date"] = d["last_updated"].dt.date
+    rows = []
+    for dte, group in d.groupby("lu_date", dropna=True):
+        s, e = compute_start_end_balance(group)
+        rows.append({"date": dte, "starting_balance": s, "ending_balance": e})
+    if rows:
+        out = pd.DataFrame(rows).sort_values("date")
+        return out
+    return pd.DataFrame()
+
+def safe_sum_by_date(df: pd.DataFrame, col_date: str, value_col: str = "std_amount"):
+    if df.empty or col_date not in df.columns:
+        return pd.DataFrame()
+    temp = df.copy()
+    temp = parse_dates(temp, [col_date])
+    # group by tanggal saja (tanpa jam)
+    temp["__d"] = temp[col_date].dt.date
+    g = temp.groupby("__d", dropna=True)[value_col].sum().reset_index()
+    g.columns = ["date", f"sum_{value_col}"]
+    return g.sort_values("date")
 
 # ======================
-# MAIN CONTENT
+# PAGES
 # ======================
 if st.session_state.current_page == 'Upload Data':
     st.title("📤 Upload Reconciliation Data")
-    st.markdown('<p class="subtitle">Upload your CSV or Excel files to the database</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Upload CSV/XLSX dengan kolom std_* dan related fields</p>', unsafe_allow_html=True)
 
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -367,183 +193,140 @@ if st.session_state.current_page == 'Upload Data':
 
         if uploaded_file is not None:
             try:
-                # Read file
-                if uploaded_file.name.endswith(".csv"):
-                    df_upload = pd.read_csv(uploaded_file)
-                else:
-                    df_upload = pd.read_excel(uploaded_file)
+                df_upload = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
 
-                # File info
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("File Name", uploaded_file.name)
-                with col2:
-                    st.metric("Total Rows", f"{len(df_upload):,}")
-                with col3:
-                    st.metric("Total Columns", len(df_upload.columns))
+                c1, c2, c3 = st.columns(3)
+                with c1: st.metric("File Name", uploaded_file.name)
+                with c2: st.metric("Total Rows", f"{len(df_upload):,}")
+                with c3: st.metric("Total Columns", len(df_upload.columns))
 
-                # Preview
                 st.markdown("### 👀 Data Preview")
                 st.dataframe(df_upload.head(10), use_container_width=True)
 
-                # Options
                 st.markdown("### ⚙️ Upload Options")
                 col1, col2 = st.columns(2)
                 with col1:
                     duplicate_action = st.selectbox(
                         "Handle Duplicates:",
                         ["Skip Duplicates", "Update Existing", "Add All (Allow Duplicates)"],
-                        help="Choose how to handle records that already exist in database"
+                        help="ON CONFLICT pakai std_identifier (disarankan unique)"
                     )
                 with col2:
                     unique_column = st.selectbox(
                         "Unique Identifier:",
-                        ["tx_id_gds", "ref_number_gds", "unique_id_gds", "invoice_number_dash"],
-                        help="Column used to identify duplicate records"
+                        ["std_identifier", "tx_id"],
+                        help="Kolom unik untuk dedupe/UPSERT"
                     )
 
-                # Upload button
                 if st.button("💾 Save to Database", type="primary", use_container_width=True):
                     with st.spinner("Processing and saving data to database..."):
-                        # Normalize columns
-                        df_upload.columns = [c.lower() for c in df_upload.columns]
+                        # Normalisasi
+                        df_upload.columns = [c.strip().lower() for c in df_upload.columns]
 
                         valid_columns = [
-                            'no_dash','payment_method_dash','acquirer_dash','transaction_date_dash',
-                            'recon_code_dash','invoice_number_dash','type_dash','credit_type_dash','currency_dash',
-                            'total_amount_dash','total_discount_dash','aggregator_invoicing_dash','total_fee_dash',
-                            'net_amount_dash','settlement_schedule_dash','status_dash','remarks_dash',
-                            'settlement_batch_number_dash','settlement_amount_dash','destination_bank_dash',
-                            'destination_account_name_dash','destination_account_number_dash','created_datetime_gds',
-                            'last_updated_datetime_gds','transaction_datetime_gds','settlement_time_gds',
-                            'settlement_amount_gds','amount_gds','service_gds','sender_bank_gds','vendor_gds',
-                            'transaction_status_gds','username_gds','tx_id_gds','ref_number_gds','unique_id_gds',
-                            'va_number_gds','admin_fee_gds','admin_fee_invoice_gds','deduction_cost_gds',
-                            'mam_child_username_gds','mam_parent_username_gds','charge_transaction_id_gds',
-                            '_merge','recon_status'
+                            # kolom yang kamu definisikan di create_db.py (lowercase semua)
+                            'std_transaction_date','std_vendor','std_identifier','std_username',
+                            'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
+                            'std_balance_joiner','std_vendor_settled_date',
+                            'id','created','create_by','last_updated','last_update_by','tx_id',
+                            'tx_type','username','amount','balance_flow','balance_before','balance_after',
+                            'description','used_overdraft_before','used_overdraft_after','service_fee_paid',
+                            'transaction_fee_paid','service_fee_before','service_fee_after',
+                            'pending_balance_after','pending_balance_before','admin_fee','transfer_amount',
+                            'freeze_balance_before','freeze_balance_after','recon_balance_status'
                         ]
                         df_upload = df_upload[[c for c in df_upload.columns if c in valid_columns]]
 
-                        # Date parsing
-                        date_columns = [
-                            'transaction_date_dash', 'created_datetime_gds', 'last_updated_datetime_gds',
-                            'transaction_datetime_gds', 'settlement_time_gds'
-                        ]
-                        for col in date_columns:
-                            if col in df_upload.columns:
-                                df_upload[col] = pd.to_datetime(df_upload[col], errors="coerce", dayfirst=True)
+                        # parse tanggal
+                        df_upload = parse_dates(df_upload, ["std_transaction_date", "std_vendor_settled_date", "created", "last_updated"])
 
-                        # Numeric columns
-                        numeric_columns = [
-                            'total_amount_dash','total_discount_dash','total_fee_dash','net_amount_dash',
-                            'settlement_amount_dash','settlement_amount_gds','amount_gds','admin_fee_gds',
-                            'admin_fee_invoice_gds','deduction_cost_gds'
-                        ]
-                        for col in numeric_columns:
-                            if col in df_upload.columns:
-                                df_upload[col] = (
-                                    df_upload[col].astype(str)
-                                        .str.replace(",", "", regex=False)
-                                        .str.replace(" ", "", regex=False)
+                        # numeric sanitize
+                        for nc in [
+                            'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
+                            'amount','balance_before','balance_after','used_overdraft_before','used_overdraft_after',
+                            'service_fee_paid','transaction_fee_paid','service_fee_before','service_fee_after',
+                            'pending_balance_after','pending_balance_before','admin_fee','transfer_amount',
+                            'freeze_balance_before','freeze_balance_after'
+                        ]:
+                            if nc in df_upload.columns:
+                                df_upload[nc] = pd.to_numeric(
+                                    pd.Series(df_upload[nc]).astype(str).str.replace(",", "", regex=False).str.replace(" ", "", regex=False),
+                                    errors="coerce"
                                 )
-                                df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
 
-                        # Dedupe flow
                         unique_col = unique_column.lower()
 
                         if duplicate_action == "Add All (Allow Duplicates)":
                             with engine.begin() as conn:
                                 df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
-                            uploaded_count = len(df_upload)
-                            duplicate_count = 0
-
+                            uploaded_count = len(df_upload); duplicate_count = 0
                         else:
                             if unique_col in df_upload.columns:
-                                unique_values = df_upload[unique_col].dropna().astype(str).unique()
-
+                                keys = df_upload[unique_col].dropna().astype(str).unique().tolist()
                                 with engine.connect() as conn:
-                                    if len(unique_values) == 0:
+                                    if not keys:
                                         existing_ids = set()
                                     else:
-                                        # escape single quotes
-                                        vals = "', '".join(v.replace("'", "''") for v in unique_values)
-                                        existing_query = f"""
-                                            SELECT DISTINCT {unique_col}
-                                            FROM {tbl('reconciliation')}
-                                            WHERE {unique_col} IN ('{vals}')
-                                        """
+                                        vals = "', '".join(k.replace("'", "''") for k in keys)
+                                        q = f"SELECT DISTINCT {unique_col} FROM {tbl('reconciliation')} WHERE {unique_col} IN ('{vals}')"
                                         try:
-                                            existing_df = pd.read_sql(text(existing_query), conn)
-                                            existing_ids = set(existing_df[unique_col].astype(str).values)
+                                            ex = pd.read_sql(text(q), conn)
+                                            existing_ids = set(ex[unique_col].astype(str).tolist())
                                         except Exception:
                                             existing_ids = set()
 
-                                df_upload['__is_dup'] = df_upload[unique_col].astype(str).isin(existing_ids)
-                                duplicates = df_upload[df_upload['__is_dup']]
-                                new_records = df_upload[~df_upload['__is_dup']]
+                                df_upload["__dup"] = df_upload[unique_col].astype(str).isin(existing_ids)
+                                duplicates = df_upload[df_upload["__dup"]]
+                                new_records = df_upload[~df_upload["__dup"]]
                                 duplicate_count = len(duplicates)
 
                                 if duplicate_action == "Skip Duplicates":
-                                    if len(new_records) > 0:
+                                    if not new_records.empty:
                                         with engine.begin() as conn:
-                                            new_records.drop(columns='__is_dup').to_sql(
-                                                "reconciliation", conn, if_exists="append", index=False, schema=SCHEMA
-                                            )
+                                            new_records.drop(columns="__dup").to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
                                     uploaded_count = len(new_records)
 
-                                elif duplicate_action == "Update Existing":
-                                    # Insert new
-                                    if len(new_records) > 0:
+                                else:  # Update Existing
+                                    if not new_records.empty:
                                         with engine.begin() as conn:
-                                            new_records.drop(columns='__is_dup').to_sql(
-                                                "reconciliation", conn, if_exists="append", index=False, schema=SCHEMA
-                                            )
-
-                                    # Upsert duplicates
-                                    if len(duplicates) > 0:
-                                        duplicates_clean = duplicates.drop(columns='__is_dup')
+                                            new_records.drop(columns="__dup").to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
+                                    if not duplicates.empty:
+                                        dup_clean = duplicates.drop(columns="__dup")
                                         with engine.begin() as conn:
-                                            # Temp table (schema default)
-                                            duplicates_clean.to_sql("temp_reconciliation", conn, if_exists="replace", index=False)
-
-                                            columns = list(duplicates_clean.columns)
-                                            columns_str = ', '.join(columns)
-                                            update_str = ', '.join(
-                                                [f"{col} = EXCLUDED.{col}" for col in columns if col != unique_col]
-                                            )
-                                            upsert_query = f"""
+                                            dup_clean.to_sql("temp_reconciliation", conn, if_exists="replace", index=False)
+                                            cols = list(dup_clean.columns)
+                                            columns_str = ", ".join(cols)
+                                            update_str = ", ".join([f"{c} = EXCLUDED.{c}" for c in cols if c != unique_col])
+                                            upsert = f"""
                                                 INSERT INTO {tbl('reconciliation')} ({columns_str})
                                                 SELECT {columns_str} FROM temp_reconciliation
                                                 ON CONFLICT ({unique_col}) DO UPDATE SET {update_str}
                                             """
-                                            conn.execute(text(upsert_query))
+                                            conn.execute(text(upsert))
                                             conn.execute(text("DROP TABLE temp_reconciliation"))
-
                                     uploaded_count = len(df_upload)
-
-                                df_upload.drop(columns='__is_dup', inplace=True)
+                                df_upload.drop(columns="__dup", inplace=True)
                             else:
                                 with engine.begin() as conn:
                                     df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
-                                uploaded_count = len(df_upload)
-                                duplicate_count = 0
+                                uploaded_count = len(df_upload); duplicate_count = 0
 
-                        # Messages
+                        # message
                         if duplicate_count > 0:
                             if duplicate_action == "Skip Duplicates":
-                                st.success(f"✅ Successfully uploaded {uploaded_count:,} new records! Skipped {duplicate_count:,} duplicates.")
+                                st.success(f"✅ Uploaded {uploaded_count:,} new | Skipped {duplicate_count:,} dup.")
                             elif duplicate_action == "Update Existing":
-                                st.success(f"✅ Successfully processed {uploaded_count:,} records! Updated {duplicate_count:,} existing records.")
+                                st.success(f"✅ Processed {uploaded_count:,} | Updated {duplicate_count:,} existing.")
                             else:
-                                st.success(f"✅ Successfully uploaded {uploaded_count:,} records!")
+                                st.success(f"✅ Uploaded {uploaded_count:,}.")
                         else:
-                            st.success(f"✅ Successfully uploaded {uploaded_count:,} new records to the database!")
+                            st.success(f"✅ Uploaded {uploaded_count:,} rows.")
 
                         if duplicate_count > 0:
                             c1, c2, c3 = st.columns(3)
-                            with c1: st.metric("Total Records", f"{len(df_upload):,}")
-                            with c2: st.metric("New Records", f"{uploaded_count:,}")
-                            with c3: st.metric("Duplicates Found", f"{duplicate_count:,}")
+                            with c1: st.metric("Total Rows", f"{len(df_upload):,}")
+                            with c2: st.metric("New Rows", f"{uploaded_count:,}")
+                            with c3: st.metric("Duplicates", f"{duplicate_count:,}")
 
             except Exception as e:
                 st.error(f"❌ Error processing file: {e}")
@@ -557,159 +340,198 @@ elif st.session_state.current_page == 'Visualization':
     try:
         with engine.connect() as conn:
             df_viz = pd.read_sql(text(f"""
-                SELECT transaction_date_dash, username_gds, tx_id_gds, 
-                       total_amount_dash, recon_status, payment_method_dash
+                SELECT std_transaction_date, std_vendor, std_identifier, std_amount, std_vendor_settled_date, last_updated
                 FROM {tbl('reconciliation')}
-                WHERE transaction_date_dash >= CURRENT_DATE - INTERVAL '30 days'
+                WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '30 days'
             """), conn)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df_viz = pd.DataFrame()
 
     if not df_viz.empty:
-        col1, col2 = st.columns(2)
+        df_viz = parse_dates(df_viz, ["std_transaction_date","std_vendor_settled_date","last_updated"])
 
+        col1, col2 = st.columns(2)
         with col1:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 🥧 Status Distribution")
-            fig_pie = px.pie(
-                df_viz.groupby('recon_status').size().reset_index(name='count'),
-                values='count', names='recon_status',
-                color_discrete_map={'Reconciled': '#10b981', 'Unreconciled': '#ef4444'}
-            )
-            fig_pie.update_layout(showlegend=True, height=400)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.markdown("### 📈 Sum std_amount by std_transaction_date")
+            g1 = safe_sum_by_date(df_viz, "std_transaction_date")
+            fig1 = px.line(g1, x="date", y="sum_std_amount")
+            fig1.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
+            st.plotly_chart(fig1, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
         with col2:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📈 Daily Trend (Last 30 Days)")
-            if not pd.api.types.is_datetime64_any_dtype(df_viz['transaction_date_dash']):
-                df_viz['transaction_date_dash'] = pd.to_datetime(df_viz['transaction_date_dash'], errors='coerce')
-            daily_data = (
-                df_viz.groupby([df_viz['transaction_date_dash'].dt.date, 'recon_status'])
-                .size().reset_index(name='count')
-            ).rename(columns={'transaction_date_dash': 'tx_date'})
-            fig_line = px.line(
-                daily_data, x='tx_date', y='count', color='recon_status',
-                color_discrete_map={'Reconciled': '#10b981', 'Unreconciled': '#ef4444'}
-            )
-            fig_line.update_layout(height=400)
-            st.plotly_chart(fig_line, use_container_width=True)
+            st.markdown("### 📈 Sum std_amount by std_vendor_settled_date")
+            g2 = safe_sum_by_date(df_viz, "std_vendor_settled_date")
+            fig2 = px.line(g2, x="date", y="sum_std_amount")
+            fig2.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
+            st.plotly_chart(fig2, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
-        if 'payment_method_dash' in df_viz.columns:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 💳 Payment Method Analysis")
-            payment_data = df_viz.groupby(['payment_method_dash', 'recon_status']).size().reset_index(name='count')
-            fig_bar = px.bar(
-                payment_data, x='payment_method_dash', y='count', color='recon_status',
-                color_discrete_map={'Reconciled': '#10b981', 'Unreconciled': '#ef4444'}
-            )
-            fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 📈 Sum std_amount by last_updated (date)")
+        g3 = safe_sum_by_date(df_viz, "last_updated")
+        fig3 = px.bar(g3, x="date", y="sum_std_amount")
+        fig3.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
+        st.plotly_chart(fig3, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # starting/ending per hari
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 🧮 Daily Starting/Ending Balance (by last_updated)")
+        # kebutuhan balance: ambil kolom balance_before/after, kalau ga ada di SELECT atas, tarik lagi ringkas
+        if not set(["balance_before","balance_after"]).issubset(df_viz.columns):
+            try:
+                with engine.connect() as conn:
+                    df_bal = pd.read_sql(text(f"""
+                        SELECT last_updated, balance_before, balance_after
+                        FROM {tbl('reconciliation')}
+                        WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '30 days'
+                    """), conn)
+                df_viz = df_viz.merge(df_bal, how="left", on="last_updated")
+            except:
+                pass
+        dtable = daily_start_end_table(df_viz)
+        if not dtable.empty:
+            st.dataframe(dtable, use_container_width=True)
+        else:
+            st.info("Data tidak cukup untuk menghitung starting/ending balance harian.")
+        st.markdown('</div>', unsafe_allow_html=True)
     else:
-        st.info("📊 No data available for visualization. Please upload data first.")
+        st.info("📊 No data available for visualization. Please upload or widen your filters.")
 
 else:
-    # DASHBOARD
+    # ============= DASHBOARD =============
     st.title("📊 Reconciliation Dashboard")
     st.markdown('<p class="subtitle">Monitor and analyze your reconciliation data</p>', unsafe_allow_html=True)
 
+    # -------- Filters --------
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🔍 Filters")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            start_date = st.date_input("Start Date", value=datetime(2025,1,1))
+            start_date = st.date_input("Start Date", value=date(2025,1,1))
         with col2:
-            end_date = st.date_input("End Date", value=datetime.today())
+            end_date = st.date_input("End Date", value=date.today())
         with col3:
-            username = st.text_input("Username")
+            f_vendor = st.text_input("std_vendor")
         with col4:
-            identifier = st.text_input("Transaction ID")
+            f_identifier = st.text_input("std_identifier")
+        col5, _ = st.columns([1,3])
+        with col5:
+            f_balance_joiner = st.text_input("std_balance_joiner")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
-    query = f"""
-        SELECT transaction_date_dash, username_gds, tx_id_gds, total_amount_dash, recon_status,
-               payment_method_dash, acquirer_dash
+    # -------- Query data --------
+    base_query = f"""
+        SELECT 
+          std_transaction_date, std_vendor, std_identifier, std_username,
+          std_admin_fee, std_admin_fee_invoice, std_amount, std_vendor_cost,
+          std_balance_joiner, std_vendor_settled_date,
+          last_updated, balance_before, balance_after
         FROM {tbl('reconciliation')}
-        WHERE transaction_date_dash BETWEEN :start_date AND :end_date
+        WHERE std_transaction_date BETWEEN :start_date AND :end_date
     """
     params = {"start_date": start_date, "end_date": end_date}
-    if username:
-        query += " AND username_gds ILIKE :username"
-        params["username"] = f"%{username}%"
-    if identifier:
-        query += " AND tx_id_gds ILIKE :identifier"
-        params["identifier"] = f"%{identifier}%"
+    if f_vendor:
+        base_query += " AND std_vendor ILIKE :vendor"
+        params["vendor"] = f"%{f_vendor}%"
+    if f_identifier:
+        base_query += " AND std_identifier ILIKE :ident"
+        params["ident"] = f"%{f_identifier}%"
+    if f_balance_joiner:
+        base_query += " AND std_balance_joiner ILIKE :bj"
+        params["bj"] = f"%{f_balance_joiner}%"
 
     try:
         with engine.connect() as conn:
-            df = pd.read_sql(text(query), conn, params=params)
+            df = pd.read_sql(text(base_query), conn, params=params)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df = pd.DataFrame()
 
+    # -------- Show data + Metrics --------
+    show_cols = [
+        'std_transaction_date','std_vendor','std_identifier','std_username',
+        'std_admin_fee','std_admin_fee_invoice','std_amount',
+        'std_vendor_cost','std_balance_joiner','std_vendor_settled_date'
+    ]
+
     if not df.empty:
+        df = parse_dates(df, ["std_transaction_date","std_vendor_settled_date","last_updated"])
+
+        # summary metrics
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 📈 Summary Metrics")
 
-            col1, col2, col3, col4 = st.columns(4)
             total_records = len(df)
+            total_amount = float(df['std_amount'].sum()) if 'std_amount' in df.columns else 0.0
+            start_bal, end_bal = compute_start_end_balance(df)
 
-            # >>> Seragamkan status: gunakan 'Reconciled'/'Unreconciled'
-            reconciled_count = len(df[df['recon_status'] == 'Reconciled'])
-            unreconciled_count = len(df[df['recon_status'] == 'Unreconciled'])
-            total_amount = df['total_amount_dash'].sum() if 'total_amount_dash' in df.columns else 0
-
-            with col1:
-                st.metric("Total Records", f"{total_records:,}")
-            with col2:
-                st.metric("Reconciled", f"{reconciled_count:,}", f"{(reconciled_count/total_records*100 if total_records else 0):.1f}%")
-            with col3:
-                st.metric("Unreconciled", f"{unreconciled_count:,}", f"{(unreconciled_count/total_records*100 if total_records else 0):.1f}%")
-            with col4:
-                st.metric("Total Amount", f"Rp {total_amount:,.0f}")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.metric("Total Records", f"{total_records:,}")
+            with c2: st.metric("Sum std_amount", f"{total_amount:,.2f}")
+            with c3: st.metric("Starting Balance", "-" if start_bal is None else f"{start_bal:,.2f}")
+            with c4: st.metric("Ending Balance", "-" if end_bal is None else f"{end_bal:,.2f}")
 
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # sum(std_amount) by std_transaction_date, std_vendor_settled_date, last_updated(date)
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📋 Reconciliation Data")
-            tab1, tab2, tab3 = st.tabs(["📊 All Data", "✅ Reconciled", "❌ Unreconciled"])
+            st.markdown("### 🧮 Sum std_amount by Key Dates")
 
-            with tab1:
-                st.dataframe(df, use_container_width=True, height=400)
-                st.download_button(
-                    "📥 Download All Data", df.to_csv(index=False),
-                    f"reconciliation_all_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv"
-                )
+            c1, c2, c3 = st.columns(3)
+            g1 = safe_sum_by_date(df, "std_transaction_date")
+            g2 = safe_sum_by_date(df, "std_vendor_settled_date")
+            g3 = safe_sum_by_date(df, "last_updated")
 
-            with tab2:
-                df_reconciled = df[df['recon_status'] == 'Reconciled']
-                if not df_reconciled.empty:
-                    st.dataframe(df_reconciled, use_container_width=True, height=400)
-                    st.download_button(
-                        "📥 Download Reconciled", df_reconciled.to_csv(index=False),
-                        f"reconciliation_reconciled_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv"
-                    )
-                else:
-                    st.info("No reconciled data found.")
+            with c1:
+                st.markdown("**By std_transaction_date**")
+                if not g1.empty: st.dataframe(g1, use_container_width=True, height=260)
+                else: st.caption("No data")
 
-            with tab3:
-                df_unreconciled = df[df['recon_status'] == 'Unreconciled']
-                if not df_unreconciled.empty:
-                    st.dataframe(df_unreconciled, use_container_width=True, height=400)
-                    st.download_button(
-                        "📥 Download Unreconciled", df_unreconciled.to_csv(index=False),
-                        f"reconciliation_unreconciled_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv"
-                    )
-                else:
-                    st.info("No unreconciled data found.")
+            with c2:
+                st.markdown("**By std_vendor_settled_date**")
+                if not g2.empty: st.dataframe(g2, use_container_width=True, height=260)
+                else: st.caption("No data")
+
+            with c3:
+                st.markdown("**By last_updated (date)**")
+                if not g3.empty: st.dataframe(g3, use_container_width=True, height=260)
+                else: st.caption("No data")
 
             st.markdown('</div>', unsafe_allow_html=True)
+
+        # daily starting/ending table (opsional)
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 📅 Daily Starting/Ending Balance (by last_updated)")
+            dtable = daily_start_end_table(df)
+            if not dtable.empty:
+                st.dataframe(dtable, use_container_width=True, height=280)
+            else:
+                st.caption("Tidak ada data balance yang cukup untuk dirangkum harian.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # main data table (hanya kolom yang kamu minta)
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("### 📋 Reconciliation Data (Selected Fields)")
+            present_cols = [c for c in show_cols if c in df.columns]
+            st.dataframe(df[present_cols].sort_values("std_transaction_date", na_position="last"), use_container_width=True, height=420)
+            st.download_button(
+                "📥 Download Visible Fields",
+                df[present_cols].to_csv(index=False),
+                f"reconciliation_selected_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+
     else:
         st.info("🔍 No data found. Please check your filters or upload data first.")
