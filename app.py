@@ -500,7 +500,8 @@ else:
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🔍 Filters")
-        col1, col2, col3, col4 = st.columns(4)
+
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             start_date = st.date_input("Start Date", value=default_start)
         with col2:
@@ -509,13 +510,15 @@ else:
             f_vendor = st.text_input("std_vendor")
         with col4:
             f_identifier = st.text_input("std_identifier")
-        col5, _ = st.columns([1,3])
         with col5:
-            f_balance_joiner = st.text_input("std_balance_joiner")
-        col6 = st.columns([3,1])
-        with col6:
             f_username = st.text_input("std_username")
+
+        col6, _ = st.columns([1,3])
+        with col6:
+            f_balance_joiner = st.text_input("std_balance_joiner")
+
         st.markdown('</div>', unsafe_allow_html=True)
+
 
     # -------- (C) DATA --------
     base_query = f"""
