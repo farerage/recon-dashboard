@@ -1,5 +1,7 @@
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "reconku"
-DB_USER = "postgres"
-DB_PASS = "fgerry"
+# config.py
+
+DB_USER = "postgres.ivayfglmtlnnbaxotc"
+DB_PASS = "fgerry"   # ganti dengan password DB kamu
+DB_HOST = "aws-1-ap-southeast-1.pooler.supabase.com"
+DB_PORT = "6543"
+DB_NAME = "postgres"
