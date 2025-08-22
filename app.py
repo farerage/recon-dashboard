@@ -94,7 +94,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📈 Quick Stats")
-    # Quick stats: 7 hari terakhir by std_transaction_date
     try:
         with engine.connect() as conn:
             qs = pd.read_sql(text(f"""
@@ -123,10 +122,6 @@ def coalesce(a, b):
     return a if pd.notna(a) else b
 
 def compute_start_end_balance(df: pd.DataFrame):
-    """
-    Starting = balance_after (fallback balance_before) pada earliest last_updated
-    Ending   = balance_after (fallback balance_before) pada latest last_updated
-    """
     if df.empty or "last_updated" not in df.columns:
         return None, None
     tmp = df.copy()
@@ -146,10 +141,6 @@ def compute_start_end_balance(df: pd.DataFrame):
     return start_val, end_val
 
 def daily_start_end_table_chained(df: pd.DataFrame):
-    """
-    Buat tabel per-hari (berdasarkan tanggal last_updated) untuk starting & ending balance.
-    Starting hari n otomatis mengambil ending hari n-1 jika tersedia.
-    """
     if df.empty or "last_updated" not in df.columns:
         return pd.DataFrame()
     d = df.copy()
@@ -162,12 +153,9 @@ def daily_start_end_table_chained(df: pd.DataFrame):
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
-
-    # Chain starting balance = previous day's ending if available
     prev_end = None
     for i in range(len(out)):
         if i == 0:
-            # if starting missing and prev_end exists (rare), fill
             if pd.isna(out.loc[i, "starting_balance"]) and prev_end is not None:
                 out.loc[i, "starting_balance"] = prev_end
         else:
@@ -177,9 +165,6 @@ def daily_start_end_table_chained(df: pd.DataFrame):
     return out
 
 def safe_sum_by_date(df: pd.DataFrame, col_date: str, value_col: str):
-    """
-    Sum 'value_col' per tanggal (tanpa jam) dari kolom tanggal 'col_date'.
-    """
     if df.empty or col_date not in df.columns or value_col not in df.columns:
         return pd.DataFrame()
     temp = df.copy()
@@ -325,7 +310,6 @@ if st.session_state.current_page == 'Upload Data':
                                     df_upload.to_sql("reconciliation", conn, if_exists="append", index=False, schema=SCHEMA)
                                 uploaded_count = len(df_upload); duplicate_count = 0
 
-                        # message
                         if duplicate_count > 0:
                             if duplicate_action == "Skip Duplicates":
                                 st.success(f"✅ Uploaded {uploaded_count:,} new | Skipped {duplicate_count:,} dup.")
@@ -349,7 +333,7 @@ if st.session_state.current_page == 'Upload Data':
 
 elif st.session_state.current_page == 'Analytics':
     st.title("📈 Analytics")
-    st.markdown('<p class="subtitle">Visual & tabular analytics of reconciliation data</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Tabular analytics for quick comparison</p>', unsafe_allow_html=True)
 
     # ---------- Filters ----------
     with st.container():
@@ -364,7 +348,7 @@ elif st.session_state.current_page == 'Analytics':
             a_username = st.text_input("Filter std_username (contains)", key="a_user")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- Query Data for Analytics ----------
+    # ---------- Query Data ----------
     try:
         with engine.connect() as conn:
             query = f"""
@@ -396,60 +380,63 @@ elif st.session_state.current_page == 'Analytics':
     if not df_viz.empty:
         df_viz = parse_dates(df_viz, ["std_transaction_date","std_vendor_settled_date","last_updated"])
 
-        # ========== Charts ==========
-        col1, col2 = st.columns(2)
+        # ==== 3 SUM TABLES (no charts), sejajar & kolom kecil ====
+        cA, cB, cC = st.columns(3)
 
-        # Sum std_amount by std_transaction_date
-        with col1:
+        # 1) Sum std_amount by std_transaction_date
+        with cA:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📈 Sum `std_amount` by `std_transaction_date`")
+            st.markdown("**Sum `std_amount` by `std_transaction_date`**")
             g1 = safe_sum_by_date(df_viz, "std_transaction_date", "std_amount")
             if not g1.empty:
-                fig1 = px.line(g1, x="date", y="sum_std_amount")
-                fig1.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
-                st.plotly_chart(fig1, use_container_width=True)
-                st.dataframe(g1, use_container_width=True, height=240)
+                st.dataframe(
+                    g1.style.format({"sum_std_amount": "{:,.2f}"}),
+                    use_container_width=True, height=300
+                )
             else:
                 st.caption("No data")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Sum (std_amount - std_vendor_cost) by std_vendor_settled_date
-        with col2:
+        # 2) Sum (std_amount - std_vendor_cost) by std_vendor_settled_date
+        with cB:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📈 Sum `(std_amount - std_vendor_cost)` by `std_vendor_settled_date`")
-            df_viz["_net_vendor"] = (
-                (df_viz["std_amount"].fillna(0)) - (df_viz["std_vendor_cost"].fillna(0))
-            )
-            g2 = safe_sum_by_date(df_viz.rename(columns={"_net_vendor":"net_value"}),
+            st.markdown("**Sum `(std_amount - std_vendor_cost)` by `std_vendor_settled_date`**")
+            tmp = df_viz.copy()
+            tmp["_net_value"] = tmp["std_amount"].fillna(0) - tmp["std_vendor_cost"].fillna(0)
+            g2 = safe_sum_by_date(tmp.rename(columns={"_net_value":"net_value"}),
                                   "std_vendor_settled_date", "net_value")
             if not g2.empty:
-                fig2 = px.line(g2, x="date", y="sum_net_value")
-                fig2.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
-                st.plotly_chart(fig2, use_container_width=True)
-                st.dataframe(g2, use_container_width=True, height=240)
+                st.dataframe(
+                    g2.style.format({"sum_net_value": "{:,.2f}"}),
+                    use_container_width=True, height=300
+                )
             else:
                 st.caption("No data")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Sum amount by last_updated (date)
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 📊 Sum `amount` by `last_updated` (date)")
-        g3 = safe_sum_by_date(df_viz, "last_updated", "amount")
-        if not g3.empty:
-            fig3 = px.bar(g3, x="date", y="sum_amount")
-            fig3.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
-            st.plotly_chart(fig3, use_container_width=True)
-            st.dataframe(g3, use_container_width=True, height=260)
-        else:
-            st.caption("No data")
-        st.markdown('</div>', unsafe_allow_html=True)
+        # 3) Sum amount by last_updated (date)
+        with cC:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown("**Sum `amount` by `last_updated` (date)**")
+            g3 = safe_sum_by_date(df_viz, "last_updated", "amount")
+            if not g3.empty:
+                st.dataframe(
+                    g3.style.format({"sum_amount": "{:,.2f}"}),
+                    use_container_width=True, height=300
+                )
+            else:
+                st.caption("No data")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         # Daily Starting/Ending Balance (chained)
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🧮 Daily Starting/Ending Balance (by `last_updated`, chained)")
         dtable = daily_start_end_table_chained(df_viz)
         if not dtable.empty:
-            st.dataframe(dtable, use_container_width=True, height=300)
+            st.dataframe(
+                dtable.style.format({"starting_balance":"{:,.2f}", "ending_balance":"{:,.2f}"}),
+                use_container_width=True, height=320
+            )
         else:
             st.info("Data tidak cukup untuk menghitung starting/ending balance harian.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -462,15 +449,49 @@ else:
     st.title("📊 Reconciliation Dashboard")
     st.markdown('<p class="subtitle">Monitor and analyze your reconciliation data</p>', unsafe_allow_html=True)
 
-    # -------- Filters --------
+    # -------- (A) SUMMARY METRICS — ditempatkan DI ATAS filter --------
+    # Ambil ringkas data untuk periode default (bisa kamu ubah bila perlu)
+    default_start = date(2025, 1, 1)
+    default_end = date.today()
+    try:
+        with engine.connect() as conn:
+            summary_df = pd.read_sql(
+                text(f"""
+                    SELECT 
+                        COALESCE(SUM(std_amount),0) AS sum_std_amount,
+                        COALESCE(SUM(std_vendor_cost),0) AS sum_std_vendor_cost,
+                        COALESCE(SUM(std_admin_fee),0) AS sum_std_admin_fee,
+                        COALESCE(SUM(std_admin_fee_invoice),0) AS sum_std_admin_fee_invoice
+                    FROM {tbl('reconciliation')}
+                    WHERE std_transaction_date BETWEEN :s AND :e
+                """),
+                conn, params={"s": default_start, "e": default_end}
+            )
+            s = summary_df.iloc[0]
+    except Exception as e:
+        st.error(f"❌ Database connection error (summary): {e}")
+        s = pd.Series({"sum_std_amount":0,"sum_std_vendor_cost":0,"sum_std_admin_fee":0,"sum_std_admin_fee_invoice":0})
+
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 📈 Summary Metrics")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.metric("Sum std_amount", f"{float(s['sum_std_amount']):,.2f}")
+        with c2: st.metric("Sum std_vendor_cost", f"{float(s['sum_std_vendor_cost']):,.2f}")
+        with c3: st.metric("Sum std_admin_fee", f"{float(s['sum_std_admin_fee']):,.2f}")
+        with c4: st.metric("Sum std_admin_fee_invoice", f"{float(s['sum_std_admin_fee_invoice']):,.2f}")
+        st.caption("Periode default: 2025-01-01 s.d. hari ini")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # -------- (B) FILTERS --------
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🔍 Filters")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            start_date = st.date_input("Start Date", value=date(2025,1,1))
+            start_date = st.date_input("Start Date", value=default_start)
         with col2:
-            end_date = st.date_input("End Date", value=date.today())
+            end_date = st.date_input("End Date", value=default_end)
         with col3:
             f_vendor = st.text_input("std_vendor")
         with col4:
@@ -480,7 +501,7 @@ else:
             f_balance_joiner = st.text_input("std_balance_joiner")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # -------- Query data --------
+    # -------- (C) DATA --------
     base_query = f"""
         SELECT 
           std_transaction_date, std_vendor, std_identifier, std_username,
@@ -508,7 +529,6 @@ else:
         st.error(f"❌ Database connection error: {e}")
         df = pd.DataFrame()
 
-    # -------- Show data + Metrics --------
     show_cols = [
         'std_transaction_date','std_vendor','std_identifier','std_username',
         'std_admin_fee','std_admin_fee_invoice','std_amount',
@@ -518,29 +538,12 @@ else:
     if not df.empty:
         df = parse_dates(df, ["std_transaction_date","std_vendor_settled_date","last_updated"])
 
-        # summary metrics
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📈 Summary Metrics")
-
-            total_records = len(df)
-            total_amount = float(df['std_amount'].sum()) if 'std_amount' in df.columns else 0.0
-            start_bal, end_bal = compute_start_end_balance(df)
-
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("Total Records", f"{total_records:,}")
-            with c2: st.metric("Sum std_amount", f"{total_amount:,.2f}")
-            with c3: st.metric("Starting Balance", "-" if start_bal is None else f"{start_bal:,.2f}")
-            with c4: st.metric("Ending Balance", "-" if end_bal is None else f"{end_bal:,.2f}")
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # main data table (hanya kolom yang kamu minta)
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown("### 📋 Reconciliation Data (Selected Fields)")
             present_cols = [c for c in show_cols if c in df.columns]
-            st.dataframe(df[present_cols].sort_values("std_transaction_date", na_position="last"), use_container_width=True, height=420)
+            st.dataframe(df[present_cols].sort_values("std_transaction_date", na_position="last"),
+                         use_container_width=True, height=420)
             st.download_button(
                 "📥 Download Visible Fields",
                 df[present_cols].to_csv(index=False),
