@@ -512,6 +512,9 @@ else:
         col5, _ = st.columns([1,3])
         with col5:
             f_balance_joiner = st.text_input("std_balance_joiner")
+        col6 = st.columns([3,1])
+        with col6:
+            f_username = st.text_input("std_username")
         st.markdown('</div>', unsafe_allow_html=True)
 
     # -------- (C) DATA --------
@@ -534,6 +537,10 @@ else:
     if f_balance_joiner:
         base_query += " AND std_balance_joiner ILIKE :bj"
         params["bj"] = f"%{f_balance_joiner}%"
+    if f_username:
+        base_query += " AND std_username ILIKE :uname"
+        params["uname"] = f"%{f_username}%"
+
 
     try:
         with engine.connect() as conn:
