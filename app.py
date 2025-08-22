@@ -22,8 +22,9 @@ def tbl(name: str) -> str:
 
 def ensure_schema(engine, schema: str):
     """Create schema if not exists (safe)."""
+    from sqlalchemy import text as _text
     with engine.begin() as conn:
-        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}";'))
+        conn.execute(_text(f'CREATE SCHEMA IF NOT EXISTS "{schema}";'))
 
 if SCHEMA != "public":
     try:
@@ -87,8 +88,8 @@ with st.sidebar:
         st.session_state.current_page = 'Dashboard'
     if st.button("📤 Upload Data", key="nav_upload", use_container_width=True):
         st.session_state.current_page = 'Upload Data'
-    if st.button("📈 Analytics", key="nav_visualization", use_container_width=True):
-        st.session_state.current_page = 'Visualization'
+    if st.button("📈 Analytics", key="nav_analytics", use_container_width=True):
+        st.session_state.current_page = 'Analytics'
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -131,7 +132,6 @@ def compute_start_end_balance(df: pd.DataFrame):
     tmp = df.copy()
     tmp = parse_dates(tmp, ["last_updated"])
     tmp = tmp.sort_values("last_updated")
-    # ambil first/last row yg punya nilai salah satu balance
     first = tmp.loc[tmp[["balance_after","balance_before"]].notna().any(axis=1)].head(1)
     last  = tmp.loc[tmp[["balance_after","balance_before"]].notna().any(axis=1)].tail(1)
     if first.empty or last.empty:
@@ -145,9 +145,10 @@ def compute_start_end_balance(df: pd.DataFrame):
         pass
     return start_val, end_val
 
-def daily_start_end_table(df: pd.DataFrame):
+def daily_start_end_table_chained(df: pd.DataFrame):
     """
     Buat tabel per-hari (berdasarkan tanggal last_updated) untuk starting & ending balance.
+    Starting hari n otomatis mengambil ending hari n-1 jika tersedia.
     """
     if df.empty or "last_updated" not in df.columns:
         return pd.DataFrame()
@@ -158,17 +159,31 @@ def daily_start_end_table(df: pd.DataFrame):
     for dte, group in d.groupby("lu_date", dropna=True):
         s, e = compute_start_end_balance(group)
         rows.append({"date": dte, "starting_balance": s, "ending_balance": e})
-    if rows:
-        out = pd.DataFrame(rows).sort_values("date")
-        return out
-    return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
 
-def safe_sum_by_date(df: pd.DataFrame, col_date: str, value_col: str = "std_amount"):
-    if df.empty or col_date not in df.columns:
+    # Chain starting balance = previous day's ending if available
+    prev_end = None
+    for i in range(len(out)):
+        if i == 0:
+            # if starting missing and prev_end exists (rare), fill
+            if pd.isna(out.loc[i, "starting_balance"]) and prev_end is not None:
+                out.loc[i, "starting_balance"] = prev_end
+        else:
+            if pd.notna(prev_end):
+                out.loc[i, "starting_balance"] = prev_end
+        prev_end = out.loc[i, "ending_balance"] if pd.notna(out.loc[i, "ending_balance"]) else prev_end
+    return out
+
+def safe_sum_by_date(df: pd.DataFrame, col_date: str, value_col: str):
+    """
+    Sum 'value_col' per tanggal (tanpa jam) dari kolom tanggal 'col_date'.
+    """
+    if df.empty or col_date not in df.columns or value_col not in df.columns:
         return pd.DataFrame()
     temp = df.copy()
     temp = parse_dates(temp, [col_date])
-    # group by tanggal saja (tanpa jam)
     temp["__d"] = temp[col_date].dt.date
     g = temp.groupby("__d", dropna=True)[value_col].sum().reset_index()
     g.columns = ["date", f"sum_{value_col}"]
@@ -224,7 +239,6 @@ if st.session_state.current_page == 'Upload Data':
                         df_upload.columns = [c.strip().lower() for c in df_upload.columns]
 
                         valid_columns = [
-                            # kolom yang kamu definisikan di create_db.py (lowercase semua)
                             'std_transaction_date','std_vendor','std_identifier','std_username',
                             'std_admin_fee','std_admin_fee_invoice','std_amount','std_vendor_cost',
                             'std_balance_joiner','std_vendor_settled_date',
@@ -333,17 +347,48 @@ if st.session_state.current_page == 'Upload Data':
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-elif st.session_state.current_page == 'Visualization':
-    st.title("📊 Data Visualization")
-    st.markdown('<p class="subtitle">Visual analytics of reconciliation data</p>', unsafe_allow_html=True)
+elif st.session_state.current_page == 'Analytics':
+    st.title("📈 Analytics")
+    st.markdown('<p class="subtitle">Visual & tabular analytics of reconciliation data</p>', unsafe_allow_html=True)
 
+    # ---------- Filters ----------
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 🔍 Filters")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            a_start = st.date_input("Start Date", value=date(2025,1,1), key="a_start")
+        with c2:
+            a_end = st.date_input("End Date", value=date.today(), key="a_end")
+        with c3:
+            a_username = st.text_input("Filter std_username (contains)", key="a_user")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---------- Query Data for Analytics ----------
     try:
         with engine.connect() as conn:
-            df_viz = pd.read_sql(text(f"""
-                SELECT std_transaction_date, std_vendor, std_identifier, std_amount, std_vendor_settled_date, last_updated
+            query = f"""
+                SELECT 
+                    std_transaction_date,
+                    std_vendor,
+                    std_identifier,
+                    std_username,
+                    std_amount,
+                    std_vendor_cost,
+                    std_vendor_settled_date,
+                    last_updated,
+                    amount,
+                    balance_before,
+                    balance_after
                 FROM {tbl('reconciliation')}
-                WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '30 days'
-            """), conn)
+                WHERE std_transaction_date BETWEEN :s AND :e
+            """
+            params = {"s": a_start, "e": a_end}
+            if a_username:
+                query += " AND std_username ILIKE :u"
+                params["u"] = f"%{a_username}%"
+
+            df_viz = pd.read_sql(text(query), conn, params=params)
     except Exception as e:
         st.error(f"❌ Database connection error: {e}")
         df_viz = pd.DataFrame()
@@ -351,56 +396,66 @@ elif st.session_state.current_page == 'Visualization':
     if not df_viz.empty:
         df_viz = parse_dates(df_viz, ["std_transaction_date","std_vendor_settled_date","last_updated"])
 
+        # ========== Charts ==========
         col1, col2 = st.columns(2)
+
+        # Sum std_amount by std_transaction_date
         with col1:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📈 Sum std_amount by std_transaction_date")
-            g1 = safe_sum_by_date(df_viz, "std_transaction_date")
-            fig1 = px.line(g1, x="date", y="sum_std_amount")
-            fig1.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
-            st.plotly_chart(fig1, use_container_width=True)
+            st.markdown("### 📈 Sum `std_amount` by `std_transaction_date`")
+            g1 = safe_sum_by_date(df_viz, "std_transaction_date", "std_amount")
+            if not g1.empty:
+                fig1 = px.line(g1, x="date", y="sum_std_amount")
+                fig1.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
+                st.plotly_chart(fig1, use_container_width=True)
+                st.dataframe(g1, use_container_width=True, height=240)
+            else:
+                st.caption("No data")
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # Sum (std_amount - std_vendor_cost) by std_vendor_settled_date
         with col2:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📈 Sum std_amount by std_vendor_settled_date")
-            g2 = safe_sum_by_date(df_viz, "std_vendor_settled_date")
-            fig2 = px.line(g2, x="date", y="sum_std_amount")
-            fig2.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
-            st.plotly_chart(fig2, use_container_width=True)
+            st.markdown("### 📈 Sum `(std_amount - std_vendor_cost)` by `std_vendor_settled_date`")
+            df_viz["_net_vendor"] = (
+                (df_viz["std_amount"].fillna(0)) - (df_viz["std_vendor_cost"].fillna(0))
+            )
+            g2 = safe_sum_by_date(df_viz.rename(columns={"_net_vendor":"net_value"}),
+                                  "std_vendor_settled_date", "net_value")
+            if not g2.empty:
+                fig2 = px.line(g2, x="date", y="sum_net_value")
+                fig2.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
+                st.plotly_chart(fig2, use_container_width=True)
+                st.dataframe(g2, use_container_width=True, height=240)
+            else:
+                st.caption("No data")
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # Sum amount by last_updated (date)
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 📈 Sum std_amount by last_updated (date)")
-        g3 = safe_sum_by_date(df_viz, "last_updated")
-        fig3 = px.bar(g3, x="date", y="sum_std_amount")
-        fig3.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
-        st.plotly_chart(fig3, use_container_width=True)
+        st.markdown("### 📊 Sum `amount` by `last_updated` (date)")
+        g3 = safe_sum_by_date(df_viz, "last_updated", "amount")
+        if not g3.empty:
+            fig3 = px.bar(g3, x="date", y="sum_amount")
+            fig3.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
+            st.plotly_chart(fig3, use_container_width=True)
+            st.dataframe(g3, use_container_width=True, height=260)
+        else:
+            st.caption("No data")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # starting/ending per hari
+        # Daily Starting/Ending Balance (chained)
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 🧮 Daily Starting/Ending Balance (by last_updated)")
-        # kebutuhan balance: ambil kolom balance_before/after, kalau ga ada di SELECT atas, tarik lagi ringkas
-        if not set(["balance_before","balance_after"]).issubset(df_viz.columns):
-            try:
-                with engine.connect() as conn:
-                    df_bal = pd.read_sql(text(f"""
-                        SELECT last_updated, balance_before, balance_after
-                        FROM {tbl('reconciliation')}
-                        WHERE std_transaction_date >= CURRENT_DATE - INTERVAL '30 days'
-                    """), conn)
-                df_viz = df_viz.merge(df_bal, how="left", on="last_updated")
-            except:
-                pass
-        dtable = daily_start_end_table(df_viz)
+        st.markdown("### 🧮 Daily Starting/Ending Balance (by `last_updated`, chained)")
+        dtable = daily_start_end_table_chained(df_viz)
         if not dtable.empty:
-            st.dataframe(dtable, use_container_width=True)
+            st.dataframe(dtable, use_container_width=True, height=300)
         else:
             st.info("Data tidak cukup untuk menghitung starting/ending balance harian.")
         st.markdown('</div>', unsafe_allow_html=True)
+
     else:
-        st.info("📊 No data available for visualization. Please upload or widen your filters.")
+        st.info("📊 No data available. Cek filter atau rentang tanggal.")
 
 else:
     # ============= DASHBOARD =============
@@ -423,7 +478,6 @@ else:
         col5, _ = st.columns([1,3])
         with col5:
             f_balance_joiner = st.text_input("std_balance_joiner")
-
         st.markdown('</div>', unsafe_allow_html=True)
 
     # -------- Query data --------
@@ -479,44 +533,6 @@ else:
             with c3: st.metric("Starting Balance", "-" if start_bal is None else f"{start_bal:,.2f}")
             with c4: st.metric("Ending Balance", "-" if end_bal is None else f"{end_bal:,.2f}")
 
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # sum(std_amount) by std_transaction_date, std_vendor_settled_date, last_updated(date)
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 🧮 Sum std_amount by Key Dates")
-
-            c1, c2, c3 = st.columns(3)
-            g1 = safe_sum_by_date(df, "std_transaction_date")
-            g2 = safe_sum_by_date(df, "std_vendor_settled_date")
-            g3 = safe_sum_by_date(df, "last_updated")
-
-            with c1:
-                st.markdown("**By std_transaction_date**")
-                if not g1.empty: st.dataframe(g1, use_container_width=True, height=260)
-                else: st.caption("No data")
-
-            with c2:
-                st.markdown("**By std_vendor_settled_date**")
-                if not g2.empty: st.dataframe(g2, use_container_width=True, height=260)
-                else: st.caption("No data")
-
-            with c3:
-                st.markdown("**By last_updated (date)**")
-                if not g3.empty: st.dataframe(g3, use_container_width=True, height=260)
-                else: st.caption("No data")
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # daily starting/ending table (opsional)
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("### 📅 Daily Starting/Ending Balance (by last_updated)")
-            dtable = daily_start_end_table(df)
-            if not dtable.empty:
-                st.dataframe(dtable, use_container_width=True, height=280)
-            else:
-                st.caption("Tidak ada data balance yang cukup untuk dirangkum harian.")
             st.markdown('</div>', unsafe_allow_html=True)
 
         # main data table (hanya kolom yang kamu minta)
