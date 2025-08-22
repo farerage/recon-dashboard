@@ -710,7 +710,7 @@ with st.sidebar:
                     COUNT(*) as total_records,
                     COUNT(CASE WHEN recon_status = 'Reconciled' THEN 1 END) as reconciled,
                     COUNT(CASE WHEN recon_status = 'Unreconciled' THEN 1 END) as unreconciled
-                FROM reconciliation 
+                FROM reconku.reconciliation 
                 WHERE transaction_date_dash >= CURRENT_DATE - INTERVAL '7 days'
             """), conn)
             
@@ -849,7 +849,7 @@ if st.session_state.current_page == 'Upload Data':
                                 with engine.connect() as conn:
                                     existing_query = f"""
                                     SELECT DISTINCT {unique_col} 
-                                    FROM reconciliation 
+                                    FROM reconku.reconciliation 
                                     WHERE {unique_col} IN ('{unique_values_str}')
                                     """
                                     try:
@@ -953,7 +953,7 @@ elif st.session_state.current_page == 'Visualization':
             df_viz = pd.read_sql(text("""
                 SELECT transaction_date_dash, username_gds, tx_id_gds, 
                        total_amount_dash, recon_status, payment_method_dash
-                FROM reconciliation 
+                FROM reconku.reconciliation 
                 WHERE transaction_date_dash >= CURRENT_DATE - INTERVAL '30 days'
             """), conn)
     except Exception as e:
@@ -1032,7 +1032,7 @@ else:
     query = """
     SELECT transaction_date_dash, username_gds, tx_id_gds, total_amount_dash, recon_status,
            payment_method_dash, acquirer_dash
-    FROM reconciliation
+    FROM reconku.reconciliation
     WHERE transaction_date_dash BETWEEN :start_date AND :end_date
     """
     params = {"start_date": start_date, "end_date": end_date}
